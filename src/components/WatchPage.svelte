@@ -389,11 +389,11 @@
   $: episodePlayingNext = nextEpisodeInSeason ?? (hasNextQueued ? queue[queueIndex + 1] : null);
   $: episodePrevious = previousEpisodeInSeason ?? (queueIndex > 0 ? queue[queueIndex - 1] : null);
   $: playingNextCountdown = countdownSecondsRemaining(currentTime, durationSeconds);
-  $: showPlayingNextOverlay = shouldShowPlayingNext({
+  $: showPlayingNextOverlay = !isMusicVideo && shouldShowPlayingNext({
     currentTime,
     duration: durationSeconds,
     nextItem: episodePlayingNext,
-    autoplayNext: autoplayNext && !loopMusicVideo
+    autoplayNext
   });
   $: playingNextProgress = Math.max(0, Math.min(1, playingNextCountdown / PLAYING_NEXT_COUNTDOWN_SECONDS));
   $: playingNextRingStyle = `--countdown-progress: ${playingNextProgress};`;
@@ -1382,11 +1382,12 @@
 
   function maybeAdvancePlayingNextBeforeEnd() {
     if (
+      isMusicVideo ||
       !shouldAdvancePlayingNext({
         currentTime,
         duration: durationSeconds,
         nextItem: episodePlayingNext,
-        autoplayNext: autoplayNext && !loopMusicVideo
+        autoplayNext
       }) ||
       !episodePlayingNext
     ) {
