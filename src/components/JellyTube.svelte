@@ -434,10 +434,15 @@
   async function initializeApp() {
     const initialRoute = readUrlRoute();
     route = routeForUrlRoute(initialRoute);
+    // Any navigateTo() (sidebar click, popstate, opening playback) while the
+    // initial catalog load runs bumps navigationGeneration. When that happens
+    // the user's navigation already applied its route and wrote its URL, so the
+    // stale boot navigation below must not fire — it would showHome() them back
+    // to the URL they landed on and replace their history entry.
+    const bootGeneration = navigationGeneration;
     await loadAll(routeForUrlRoute(initialRoute), loadingLabelForUrlRoute(initialRoute));
-    if (!error) {
-      await navigateTo(initialRoute, { history: 'replace', scroll: false });
-    }
+    if (error || navigationGeneration !== bootGeneration) return;
+    await navigateTo(initialRoute, { history: 'replace', scroll: false });
   }
 
   async function loadAll(skeletonRoute: Route = loadingRoute, label = loadingLabelForRoute(skeletonRoute)) {
