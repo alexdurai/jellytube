@@ -2494,11 +2494,24 @@
                 <button
                   class="player-control episode-nav-control"
                   aria-label={nextEpisodeLabel}
-                  title={nextEpisodeLabel}
                   on:click={playNextEpisode}
                 >
                   <SkipForward size={22} />
                   <span class="episode-nav-label">{episodeCode(episodePlayingNext)}</span>
+                  <span class="next-preview" aria-hidden="true">
+                    <span class="next-preview-eyebrow">Up next</span>
+                    <span class="next-preview-thumb">
+                      {#if playingNextThumbnailUrl}
+                        <img src={playingNextThumbnailUrl} alt="" loading="lazy" />
+                      {:else}
+                        <span>{playingNextTitle.slice(0, 1) || '▶'}</span>
+                      {/if}
+                    </span>
+                    <strong class="next-preview-title">{playingNextTitle}</strong>
+                    {#if playingNextCode}
+                      <span class="next-preview-code">{playingNextCode}</span>
+                    {/if}
+                  </span>
                 </button>
               {/if}
 
