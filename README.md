@@ -6,10 +6,9 @@
 
 JellyTube is a local, frontend-only Svelte application that turns selected Jellyfin libraries into a YouTube-style browsing and watching experience. It is designed for Jellyfin servers that already host downloaded YouTube archives, movies, episodic shows, and music videos.
 
-This fork adds a Dockerfile so that we can install this application as a  docker image. All credit goes to the initial author <a href="https://github.com/nilesjarvis/jellytube">nilesjarvis</a>
+This fork adds a Dockerfile so that we can install this application as a docker image. All credit goes to the initial author <a href="https://github.com/nilesjarvis/jellytube">nilesjarvis</a> for this awesome project. I have been looking for a project like this for years.
 
-This also avoids the usage of install.sh.
-
+This also avoids the use of install.sh. While the code is open source and the author is likely well-intentioned, there is always a risk that a bad actor could inject malicious code into an installation script that is executed directly from the web.
 
 
 ## One-Command Linux Installation
