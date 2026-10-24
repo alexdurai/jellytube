@@ -1,0 +1,16 @@
+.git
+.github
+
+docs
+tests
+packaging
+
+install.sh
+
+screenshots
+
+node_modules
+dist
+
+.vscode
+.idea
