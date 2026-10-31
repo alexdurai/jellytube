@@ -93,6 +93,7 @@
     JellyfinPerson
   } from '../lib/types';
   import { trickplayResolutionForSource, trickplayTileAt } from '../lib/trickplay';
+  import { embyTrickplayFrameAt, parseEmbyBif, type EmbyTrickplayFrame } from '../lib/embyTrickplay';
   import {
     canDirectPlaySource,
     detectHlsRemuxCapabilities,
@@ -126,6 +127,7 @@
 
   const dispatch = createEventDispatcher<{
     recommendationSelect: ProjectedRecommendation;
+    relatedSelect: JellyfinItem;
     nextUpSelect: JellyfinItem;
     queueSelect: JellyfinItem;
     episodeSelect: JellyfinItem;
@@ -188,6 +190,7 @@
   };
 
   type CinematicAvailability = 'idle' | 'dynamic' | 'unavailable';
+  type CaptionSize = 'small' | 'normal' | 'large' | 'extra-large';
   type MiniPlayerResizeAxis = 'top' | 'left' | 'corner';
   type MiniPlayerResizeState = {
     axis: MiniPlayerResizeAxis;
@@ -204,6 +207,7 @@
   const MINI_PLAYER_KEYBOARD_STEP = 24;
   const SEEK_STEP_SECONDS = 10;
   const BUFFERING_INDICATOR_DELAY_MS = 250;
+  const PLAYBACK_STALL_RECOVERY_DELAY_MS = 20_000;
 
   function recommendationKey(recommendation: ProjectedRecommendation) {
     return recommendation.kind === 'item'
@@ -233,6 +237,7 @@
   let error = '';
   let fallbackNotice = '';
   let detailedItem: JellyfinItem = item;
+  let movieCollections: Array<{ collection: JellyfinItem; items: JellyfinItem[] }> = [];
   let seriesCast: JellyfinPerson[] = [];
   let mediaSource: JellyfinMediaSource | null = null;
   let remuxCapabilities: HlsRemuxCapabilities | null = null;
@@ -242,6 +247,7 @@
   let hls: Hls | null = null;
   let progressTimer = 0;
   let bufferingTimer = 0;
+  let stallRecoveryTimer = 0;
   let started = false;
   let attempts: PlaybackAttempt[] = [];
   let attemptIndex = 0;
@@ -271,6 +277,8 @@
   let selectedSubtitleId = 'off';
   let subtitleMenuOpen = false;
   let activeTextTrackUrl = '';
+  let captionSize = loadCaptionSize();
+  let captionStyleElement: HTMLStyleElement | null = null;
   let aspectMode = initialPlayerAspectMode(
     localStorage.getItem(PLAYER_ASPECT_STORAGE_KEY),
     localStorage.getItem(LEGACY_ULTRAWIDE_CROP_STORAGE_KEY) === 'true'
@@ -304,6 +312,10 @@
   let hoveredSeekPercent = 0;
   let trickplayImageFailed = false;
   let previousTrickplayImageUrl = '';
+  let embyTrickplayFrames: EmbyTrickplayFrame[] = [];
+  let embyTrickplayController: AbortController | null = null;
+  let activeEmbyTrickplayFrame: EmbyTrickplayFrame | undefined;
+  let embyTrickplayObjectUrl = '';
   let introDismissed = false;
   let introSegments: JellyfinMediaSegment[] | null = null;
   let duration = 0;
@@ -332,15 +344,36 @@
     trickplayResolution && hoveredSeekSeconds >= 0
       ? trickplayTileAt(trickplayResolution.info, hoveredSeekSeconds)
       : undefined;
-  $: hoveredTrickplayUrl =
-    trickplayResolution && hoveredTrickplayTile && mediaSource
-      ? client.getTrickplayImageUrl(
-          detailedItem.Id,
-          mediaSource.Id,
-          trickplayResolution.width,
-          hoveredTrickplayTile.index
+  $: hoveredEmbyTrickplayFrame =
+    client.serverType === 'emby'
+      ? embyTrickplayFrameAt(embyTrickplayFrames, hoveredSeekSeconds)
+      : undefined;
+  $: if (hoveredEmbyTrickplayFrame !== activeEmbyTrickplayFrame) {
+    activeEmbyTrickplayFrame = hoveredEmbyTrickplayFrame;
+    if (embyTrickplayObjectUrl) URL.revokeObjectURL(embyTrickplayObjectUrl);
+    embyTrickplayObjectUrl = hoveredEmbyTrickplayFrame
+      ? URL.createObjectURL(
+          new Blob([new Uint8Array(hoveredEmbyTrickplayFrame.bytes)], { type: 'image/jpeg' })
         )
       : '';
+  }
+  $: hoveredTrickplayUrl =
+    client.serverType === 'emby'
+      ? embyTrickplayObjectUrl
+      : trickplayResolution && hoveredTrickplayTile && mediaSource
+        ? client.getTrickplayImageUrl(
+            detailedItem.Id,
+            mediaSource.Id,
+            trickplayResolution.width,
+            hoveredTrickplayTile.index
+          )
+        : '';
+  $: trickplayAspectRatio =
+    client.serverType === 'emby'
+      ? sourceAspectRatio
+      : trickplayResolution
+        ? trickplayResolution.info.Width / trickplayResolution.info.Height
+        : DEFAULT_PLAYER_SOURCE_ASPECT_RATIO;
   $: if (hoveredTrickplayUrl !== previousTrickplayImageUrl) {
     previousTrickplayImageUrl = hoveredTrickplayUrl;
     trickplayImageFailed = false;
@@ -368,6 +401,14 @@
   $: hasNextQueued = queueIndex >= 0 && queueIndex < queue.length - 1;
   $: upcomingQueue = queueIndex >= 0 ? queue.slice(queueIndex + 1) : queue;
   $: hasEpisodeShelf = episodeSeasons.length > 0;
+  $: movieCollectionForAutoplay = movieCollections.find((group) =>
+    group.items.some((collectionMovie) => collectionMovie.Id === detailedItem.Id)
+  );
+  $: nextMovieInCollection = movieCollectionForAutoplay
+    ? movieCollectionForAutoplay.items[
+        movieCollectionForAutoplay.items.findIndex((collectionMovie) => collectionMovie.Id === detailedItem.Id) + 1
+      ] ?? null
+    : null;
   $: recommendationAutoplayEntry = recommendations.find((recommendation) => {
     const playableItem = recommendationPlayableItem(recommendation);
     return (
@@ -400,6 +441,29 @@
     } catch {
       // Metadata/network may be unavailable; the series cast is supplemental.
       seriesCast = [];
+    }
+  }
+
+  async function loadMovieCollections(playbackItem: JellyfinItem) {
+    movieCollections = [];
+    if (
+      (playbackItem.Type !== 'Movie' && playbackItem.contentKind !== 'movie') ||
+      !playbackItem.sourceLibraryId
+    ) {
+      return;
+    }
+
+    try {
+      movieCollections = await client.getMovieCollections(
+        playbackItem.Id,
+        playbackItem.sourceLibraryId,
+        playbackItem.sourceLibraryName ?? 'Movies'
+      );
+    } catch (caught) {
+      console.warn(
+        'Could not load movie collections:',
+        caught instanceof Error ? caught.message : caught
+      );
     }
   }
   $: title = displayTitle(detailedItem, {
@@ -463,8 +527,12 @@
 
   onMount(() => {
     video?.setAttribute('webkit-playsinline', 'true');
+    captionStyleElement = document.createElement('style');
+    document.head.append(captionStyleElement);
+    updateCaptionStyle();
     void loadPlayback(autoplay);
     void loadSeriesCast(item);
+    void loadMovieCollections(item);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     video?.addEventListener('webkitbeginfullscreen', handleFullscreenChange);
@@ -476,12 +544,16 @@
       video?.removeEventListener('webkitbeginfullscreen', handleFullscreenChange);
       video?.removeEventListener('webkitendfullscreen', handleFullscreenChange);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      captionStyleElement?.remove();
+      captionStyleElement = null;
     };
   });
 
   onDestroy(() => {
     clearCinematicTimer();
     if (episodeScrollFrame) window.cancelAnimationFrame(episodeScrollFrame);
+    embyTrickplayController?.abort();
+    if (embyTrickplayObjectUrl) URL.revokeObjectURL(embyTrickplayObjectUrl);
     void stopPlayback();
   });
 
@@ -589,6 +661,12 @@
 
   async function loadPlayback(autoPlay = false) {
     loading = true;
+    embyTrickplayController?.abort();
+    embyTrickplayController = null;
+    embyTrickplayFrames = [];
+    activeEmbyTrickplayFrame = undefined;
+    if (embyTrickplayObjectUrl) URL.revokeObjectURL(embyTrickplayObjectUrl);
+    embyTrickplayObjectUrl = '';
     clearBuffering();
     error = '';
     fallbackNotice = '';
@@ -623,6 +701,7 @@
         sourceCollectionType: item.sourceCollectionType,
         contentKind: item.contentKind
       };
+      if (client.serverType === 'emby') void loadEmbyTrickplay(item.Id);
       try {
         introSegments = await client.getMediaSegments(item.Id);
       } catch {
@@ -678,6 +757,66 @@
       attempts = buildPlaybackAttempts(mediaSource, selectedQualityId);
       if (!attempts.length) {
         throw new Error('Jellyfin did not return a browser-compatible direct stream or HLS transcode option.');
+      }
+
+      async function loadEmbyTrickplay(itemId: string) {
+        const controller = new AbortController();
+        embyTrickplayController = controller;
+        try {
+          const response = await fetch(client.getEmbyTrickplayUrl(itemId), {
+            signal: controller.signal
+          });
+          if (!response.ok) {
+            if (response.status !== 404) {
+              throw new Error(`Emby trickplay request failed with status ${response.status}`);
+            }
+            return;
+          }
+
+          const maxBytes = 50 * 1024 * 1024;
+          const contentLength = Number(response.headers.get('Content-Length'));
+          if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+            throw new Error('Emby trickplay index is larger than the 50 MB limit.');
+          }
+
+          const reader = response.body?.getReader();
+          if (!reader) {
+            const buffer = await response.arrayBuffer();
+            if (buffer.byteLength > maxBytes) {
+              throw new Error('Emby trickplay index is larger than the 50 MB limit.');
+            }
+            if (!controller.signal.aborted) embyTrickplayFrames = parseEmbyBif(buffer);
+            return;
+          }
+
+          const chunks: Uint8Array[] = [];
+          let totalBytes = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            totalBytes += value.byteLength;
+            if (totalBytes > maxBytes) {
+              await reader.cancel();
+              throw new Error('Emby trickplay index is larger than the 50 MB limit.');
+            }
+            chunks.push(value);
+          }
+
+          const buffer = new Uint8Array(totalBytes);
+          let offset = 0;
+          for (const chunk of chunks) {
+            buffer.set(chunk, offset);
+            offset += chunk.byteLength;
+          }
+          if (!controller.signal.aborted) embyTrickplayFrames = parseEmbyBif(buffer.buffer);
+        } catch (caught) {
+          if (!controller.signal.aborted) {
+            console.warn(
+              'Could not load Emby trickplay previews:',
+              caught instanceof Error ? caught.message : caught
+            );
+          }
+        }
       }
 
       await startAttempt(0, autoPlay);
@@ -1121,6 +1260,35 @@
     return codec === 'subrip' || codec === 'srt' || codec === 'mov_text' || codec === 'vtt' || codec === 'webvtt' || codec === 'ass' || codec === 'ssa';
   }
 
+  function loadCaptionSize(): CaptionSize {
+    const stored = localStorage.getItem('jellytube.captionSize');
+    return stored === 'small' || stored === 'normal' || stored === 'large' || stored === 'extra-large'
+      ? stored
+      : 'normal';
+  }
+
+  function handleCaptionSizeChange(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    if (value !== 'small' && value !== 'normal' && value !== 'large' && value !== 'extra-large') {
+      return;
+    }
+    captionSize = value;
+    localStorage.setItem('jellytube.captionSize', value);
+    updateCaptionStyle();
+  }
+
+  function updateCaptionStyle() {
+    const fontSizes: Record<CaptionSize, string> = {
+      small: '75%',
+      normal: '100%',
+      large: '125%',
+      'extra-large': '150%'
+    };
+    if (captionStyleElement) {
+      captionStyleElement.textContent = `video::cue { font-size: ${fontSizes[captionSize]} !important; }`;
+    }
+  }
+
   function selectedSubtitleOption() {
     return subtitleOptions.find((option) => option.id === selectedSubtitleId) ?? subtitleOptions[0];
   }
@@ -1233,17 +1401,51 @@
   function clearBuffering() {
     if (bufferingTimer) window.clearTimeout(bufferingTimer);
     bufferingTimer = 0;
+    if (stallRecoveryTimer) window.clearTimeout(stallRecoveryTimer);
+    stallRecoveryTimer = 0;
     buffering = false;
   }
 
   function handleWaiting() {
     if (!video || video.paused || buffering || bufferingTimer) return;
     clearCinematicTimer();
+    scheduleStallRecovery();
     bufferingTimer = window.setTimeout(() => {
       bufferingTimer = 0;
       if (!video || video.paused || video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return;
       buffering = true;
     }, BUFFERING_INDICATOR_DELAY_MS);
+  }
+
+  function scheduleStallRecovery() {
+    if (!video || video.paused || stallRecoveryTimer) return;
+
+    const stalledAt = video.currentTime;
+    const stalledAttemptIndex = attemptIndex;
+    const stalledAttempt = activeAttempt;
+    stallRecoveryTimer = window.setTimeout(() => {
+      stallRecoveryTimer = 0;
+      if (
+        !video ||
+        video.paused ||
+        attemptIndex !== stalledAttemptIndex ||
+        activeAttempt !== stalledAttempt
+      ) {
+        return;
+      }
+      if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+        clearBuffering();
+        return;
+      }
+      if (video.currentTime > stalledAt + 0.5) {
+        scheduleStallRecovery();
+        return;
+      }
+
+      void handlePlaybackFailure(
+        'Playback stopped making progress while buffering. Trying another stream when available.'
+      );
+    }, PLAYBACK_STALL_RECOVERY_DELAY_MS);
   }
 
   function handlePlay() {
@@ -1283,6 +1485,10 @@
     if (!autoplayNext) return;
     if (hasNextQueued) {
       dispatch('next');
+      return;
+    }
+    if (isMovie && nextMovieInCollection) {
+      dispatch('relatedSelect', nextMovieInCollection);
       return;
     }
     if (recommendationAutoplayEntry) dispatch('recommendationSelect', recommendationAutoplayEntry);
@@ -2289,6 +2495,7 @@
               if (cinematicMode) scheduleCinematicSample(120);
             }}
             on:waiting={handleWaiting}
+            on:stalled={handleWaiting}
             on:timeupdate={syncPlaybackState}
             on:progress={syncBuffered}
             on:volumechange={handleVolumeChange}
@@ -2485,15 +2692,17 @@
                   role="tooltip"
                   style={`left: ${hoveredSeekPercent}%`}
                 >
-                  {#if hoveredTrickplayTile && trickplayResolution && !trickplayImageFailed}
+                  {#if hoveredTrickplayUrl && !trickplayImageFailed}
                     <span
                       class="seek-preview-image"
-                      style={`aspect-ratio: ${trickplayResolution.info.Width} / ${trickplayResolution.info.Height}`}
+                      style={`aspect-ratio: ${trickplayAspectRatio}`}
                     >
                       <img
                         src={hoveredTrickplayUrl}
                         alt={`Preview at ${formatClock(hoveredSeekSeconds)}`}
-                        style={trickplaySpriteStyle}
+                        style={client.serverType === 'emby'
+                          ? 'width: 100%; height: 100%; object-fit: cover;'
+                          : trickplaySpriteStyle}
                         draggable="false"
                         on:error={handleTrickplayImageError}
                       />
@@ -2712,6 +2921,18 @@
                   {#if subtitleMenuOpen}
                     <div class="quality-menu subtitle-menu" role="menu" aria-label="Captions">
                       <div class="quality-menu-heading">Captions</div>
+                      <label class="caption-size-setting">
+                        <span>Caption size</span>
+                        <select value={captionSize} on:change={handleCaptionSizeChange}>
+                          <option value="small">Small</option>
+                          <option value="normal">Normal</option>
+                          <option value="large">Large</option>
+                          <option value="extra-large">Extra large</option>
+                        </select>
+                      </label>
+                      {#if selectedSubtitleOption()?.delivery === 'burn'}
+                        <p class="caption-size-note">Burned-in captions use the server's size.</p>
+                      {/if}
                       {#each subtitleOptions as option (option.id)}
                         <button
                           class:active={option.id === selectedSubtitleId}
@@ -2850,6 +3071,32 @@
           {/each}
         </ul>
       </section>
+    {/if}
+
+    {#if movieCollections.length > 0}
+      {#each movieCollections as group (group.collection.Id)}
+        <section class="movie-collection-shelf" aria-label={`${group.collection.Name} collection`}>
+          <div class="movie-collection-heading">
+            <div>
+              <h2>{group.collection.Name}</h2>
+              <span>Collection</span>
+            </div>
+          </div>
+          <div class="movie-collection-grid">
+            {#each group.items as collectionMovie (collectionMovie.Id)}
+              <VideoCard
+                {client}
+                item={collectionMovie}
+                poster
+                titleContext="recommendation"
+                titleChannel={group.collection.Name}
+                on:select={(event) => dispatch('relatedSelect', event.detail)}
+                on:channel={() => dispatch('movies')}
+              />
+            {/each}
+          </div>
+        </section>
+      {/each}
     {/if}
 
     {#if hasEpisodeShelf}

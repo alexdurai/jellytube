@@ -4,7 +4,7 @@
 
 <h1 align="center">JellyTube</h1>
 
-JellyTube is a local, frontend-only Svelte application that turns selected Jellyfin libraries into a YouTube-style browsing and watching experience. It is designed for Jellyfin servers that already host downloaded YouTube archives, movies, episodic shows, and music videos.
+JellyTube is a local, frontend-only Svelte application that turns selected Jellyfin or Emby libraries into a YouTube-style browsing and watching experience. It is designed for media servers that already host downloaded YouTube archives, movies, episodic shows, and music videos. Automatic server detection checks public server information and verifies the detected type against the authenticated library request, falling back to the other supported type if needed.
 
 This fork adds a Dockerfile so that we can install this application as a docker image. All credit goes to the initial author <a href="https://github.com/nilesjarvis/jellytube">nilesjarvis</a> for this awesome project. I have been looking for a project like this for years.
 
@@ -98,11 +98,11 @@ These screenshots live in `screenshots/` and are embedded here so users can prev
 ## What JellyTube Does
 
 - **YouTube-like home feed** with Continue watching, Recommended, New videos, and Replay picks shelves.
-- **Multiple Jellyfin library support** for Shows, Home Videos & Photos, Movies, and Music Videos libraries.
+- **Multiple server library support** for Shows, Home Videos & Photos, Movies, Music Videos, and Music libraries.
 - **Dedicated Movies area** with poster-style cards, resume progress, featured/resume picks, and movie-only recommendations.
 - **Music video mixes** that group videos by artist/channel and play as queue-backed playlists.
 - **Audio Music** support for Jellyfin `music` libraries with an album/artist/song browse page and a persistent now-playing player (direct `/Audio` streaming, queue, shuffle/repeat, Media Session controls).
-- **Jellyfin trickplay seek previews** that show server-generated thumbnail images while hovering the watch-page timeline, with time and chapter labels retained when no trickplay image is available.
+- **Jellyfin and Emby trickplay seek previews** that show server-generated thumbnails while hovering the watch-page timeline (Jellyfin sprite sheets; Emby BIF indexes), with time and chapter labels retained when no trickplay image is available.
 - **Subscriptions directory** that works as a searchable show/channel directory instead of a follow/unfollow system.
 - **Season-aware show pages** for episodic libraries, including season selection, latest episode shortcuts, and lazy full-series loading.
 - **Rich watch page** with direct play where possible, source-quality HEVC/HDR remuxing on compatible displays, Jellyfin HLS fallback, persisted audio-language, caption, and aspect-ratio choices, resume position, queue/episode shelves, autoplay-next, volume persistence, 10-second seek controls, fullscreen, and responsive mobile layout.
@@ -133,10 +133,10 @@ The smoke script requires a browser exposing a WebDriver BiDi endpoint on `BIDI_
 ## Requirements
 
 - Node.js 20+ for source and manual installations; the one-command Linux installer supplies its own verified Node.js runtime
-- A Jellyfin server reachable from the browser running JellyTube
-- A Jellyfin account with media playback access
-- Jellyfin Playback Reporting plugin optional; JellyTube falls back to Jellyfin item resume/watched data without it
-- At least one supported Jellyfin library:
+- A Jellyfin or Emby server reachable from the browser running JellyTube
+- A server account with media playback access
+- Jellyfin Playback Reporting plugin optional; JellyTube falls back to server item resume/watched data without it
+- At least one supported server library:
   - **Shows** for episodic YouTube archives
   - **Home Videos & Photos** for general video archives
   - **Movies** for movie-style content
@@ -209,7 +209,7 @@ npm install
 npm run dev
 ```
 
-Open the local Vite URL, sign in with Jellyfin credentials, and select the Jellyfin libraries that should appear in JellyTube.
+Open the local Vite URL, sign in with Jellyfin or Emby credentials, and select the libraries that should appear in JellyTube.
 
 Useful development checks:
 
@@ -221,17 +221,17 @@ npm test
 
 ## First-Run Flow
 
-1. Enter the Jellyfin server URL, username, and password.
+1. Enter the Jellyfin or Emby server URL, username, and password.
 2. JellyTube validates that the account can play media and can access at least one supported library.
-3. Select one or more supported Jellyfin libraries.
-4. JellyTube saves the server URL, access token, user ID, selected libraries, and theme preference in browser local storage.
-5. After onboarding, media and API requests are made directly from the browser to Jellyfin.
+3. Select one or more supported libraries.
+4. JellyTube saves the server URL, selected server type, username, access token, user ID, selected libraries, and theme preference in browser local storage. The password is not saved.
+5. After onboarding, media and API requests are made directly from the browser to the media server.
 
 ## Application Areas
 
 ### Home
 
-The Home route is optimized for return visits. Continue watching appears first when Jellyfin has resume data, followed by latest additions, stable daily recommendations, new videos, and replay picks based on play count. Recommendations rank the complete selected video, movie, and music-video catalogs client-side, use per-user playback/favorite metadata and the optional Playback Reporting history, blend bounded results from Jellyfin's read-only Similar endpoint, diversify channels and series, and show a plain-language reason on each recommended card.
+The Home route is optimized for return visits. Continue watching appears first when the server has resume data, followed by latest additions, stable daily recommendations, new videos, and replay picks based on play count. Recommendations rank the complete selected video, movie, and music-video catalogs client-side, use per-user playback/favorite metadata and the optional Jellyfin Playback Reporting history, blend bounded results from the server's read-only Similar endpoint when available, diversify channels and series, and show a plain-language reason on each recommended card.
 
 Ordered episodic series are represented once in both Home Recommended and the Watch page's Recommended rail as a show card rather than as an arbitrary episode. The card uses complete series progress to offer the correct `Start`, `Next`, `Resume`, or `Replay` episode and opens playback with the ordered episode queue. Sequence classification accepts canonical Jellyfin TV identities (`Tvdb`, `Tmdb`, or `Imdb`) as well as explicit leading episode-code conventions, while retaining catalog-completeness, index-coverage, identity-consistency, and duplicate-slot guards. Jellyfin series that behave like unordered YouTube or clip archives remain individual video cards; ambiguous metadata always falls back to item-level recommendations.
 
@@ -257,7 +257,7 @@ Search works across selected libraries and ranks likely show/episode matches abo
 
 ### Watch
 
-The Watch page prepares a direct stream when the browser can play it and falls back to Jellyfin HLS when needed. When Jellyfin has trickplay images generated for the playing media source, hovering over the seek bar displays the matching frame from the server's thumbnail tiles; the timestamp and chapter label remain available if no image exists. Videos with multiple audio streams expose an audio-track menu beside captions; the semantic language/title choice is saved per Jellyfin server and user, carried into Jellyfin playback negotiation/reporting, and resolved safely when later videos have different stream indexes or available tracks. Alternate embedded tracks use HLS because a static direct-play URL cannot select a non-container-default track. The aspect-ratio menu preserves the source by default, can stretch incorrectly formatted media to 4:3, 16:9, or 21:9 without cropping, and retains the existing 21:9 crop mode. The player reports progress to Jellyfin, resumes from saved playback position, persists volume/mute state, supports seeking and fullscreen, and can continue through episode shelves or mix queues. Its recommendation rail projects ranked items only after excluding the current series, so an ordered show appears once with the user's progress action and cannot reappear beside one of its own episodes.
+The Watch page prepares a direct stream when the browser can play it and falls back to server HLS when needed. Jellyfin trickplay sprite images and Emby BIF thumbnails appear when hovering over the seek bar; the timestamp and chapter label remain available if a server has no generated trickplay index. Related movies from a collection and a show's season/episode shelf appear above the cast when available; movie collections support autoplay to the next film. Videos with multiple audio streams expose an audio-track menu beside captions; the semantic language/title choice is saved per server and user, carried into playback negotiation/reporting, and resolved safely when later videos have different stream indexes or available tracks. Text captions can be resized from the captions menu; server-burned captions retain the size rendered by the server. Alternate embedded tracks use HLS because a static direct-play URL cannot select a non-container-default track. The aspect-ratio menu preserves the source by default, can stretch incorrectly formatted media to 4:3, 16:9, or 21:9 without cropping, and retains the existing 21:9 crop mode. The player reports progress to the server, resumes from saved playback position, persists volume/mute state, supports seeking and fullscreen, and can continue through episode shelves or mix queues. Its recommendation rail projects ranked items only after excluding the current series, so an ordered show appears once with the user's progress action and cannot reappear beside one of its own episodes.
 
 #### HEVC And HDR Playback
 
@@ -327,16 +327,19 @@ The production server reads these optional environment variables:
 | --- | --- | --- |
 | `JELLYTUBE_HOST` | `0.0.0.0` | Host/IP address for the production server to bind. |
 | `JELLYTUBE_PORT` | `4173` | Port for the production server. |
-| `JELLYFIN_URL` | `http://localhost:8096` | Default Jellyfin server URL prefilled during onboarding. |
+| `SERVER_URL` | `http://localhost:8096` | Default Jellyfin or Emby server URL prefilled during onboarding. Takes precedence over the legacy URL variables. |
+| `SERVER_TYPE` | `auto` | Default server type in onboarding: `auto`, `jellyfin`, or `emby`. |
+| `MEDIA_SERVER_URL` | — | Legacy name for `SERVER_URL`; used only when `SERVER_URL` is unset. |
+| `JELLYFIN_URL` | — | Legacy name for `SERVER_URL`; used only when `SERVER_URL` and `MEDIA_SERVER_URL` are unset. |
 | `JELLYTUBE_DIST` | `dist` | Directory containing the built frontend. |
 | `JELLYTUBE_RUNTIME_DIR` | `.jellytube` | Runtime directory used by quick setup. |
 | `JELLYTUBE_PID_FILE` | `.jellytube/jellytube.pid` | PID file for the detached server. |
 | `JELLYTUBE_LOG_FILE` | `.jellytube/jellytube.log` | Log file for the detached server. |
 
-For Docker, set `JELLYFIN_URL` to the URL reachable from the user's browser, for example with `-e JELLYFIN_URL=http://192.168.1.20:8096`.
+For Docker, set `SERVER_URL` to the URL reachable from the user's browser, for example with `-e SERVER_URL=http://192.168.1.20:8096`. Set `SERVER_TYPE` to `jellyfin` or `emby` to preselect a server type, or leave it as `auto` to detect the type during sign-in. Existing `MEDIA_SERVER_URL` and `JELLYFIN_URL` deployments remain supported.
 
 ## Data And Security Notes
 
 JellyTube is a frontend-only app. It does not proxy Jellyfin credentials or media through a backend service. Credentials and session data are stored in the user's browser local storage, and media/API calls go directly from the browser to the configured Jellyfin server.
 
-Because JellyTube runs in the browser, the Jellyfin server must be reachable from that browser and configured to allow the browser requests needed by your deployment.
+Because JellyTube runs in the browser, the Jellyfin or Emby server must be reachable from that browser and configured to allow the browser requests needed by your deployment.

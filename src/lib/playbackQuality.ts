@@ -84,7 +84,7 @@ export function playbackQualityOptions(
     {
       id: 'auto',
       label: 'Auto',
-      detail: directAvailable ? 'device optimized' : 'Jellyfin managed',
+      detail: directAvailable ? 'device optimized' : 'Server managed',
       mode: 'auto'
     }
   ];

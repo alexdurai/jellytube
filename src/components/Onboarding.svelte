@@ -12,6 +12,7 @@
   } from 'lucide-svelte';
   import {
     assertUserCanPlayMedia,
+    detectMediaServerType,
     JellyfinClient,
     JellyfinError,
     isEligibleLibrary,
@@ -19,9 +20,20 @@
     libraryToSelectedSource,
     normalizeServerUrl
   } from '../lib/jellyfin';
-  import type { AppSession, JellyfinLibrary, PublicServerInfo } from '../lib/types';
+  import type {
+    AppSession,
+    JellyfinLibrary,
+    MediaServerType,
+    PublicServerInfo
+  } from '../lib/types';
 
   const dispatch = createEventDispatcher<{ ready: AppSession }>();
+
+  type ServerTypeChoice = 'auto' | MediaServerType;
+  const SERVER_TYPE_CHOICE_KEY = 'jellytube.serverTypeChoice';
+  const storedServerTypeChoice = localStorage.getItem(SERVER_TYPE_CHOICE_KEY);
+  const isServerTypeChoice = (value: unknown): value is ServerTypeChoice =>
+    value === 'auto' || value === 'jellyfin' || value === 'emby';
 
   let serverUrl = localStorage.getItem('jellytube.lastServerUrl') ?? '';
   let username = localStorage.getItem('jellytube.lastUsername') ?? '';
@@ -29,6 +41,10 @@
   let loading = false;
   let error = '';
   let info: PublicServerInfo | null = null;
+  let serverTypeChoice: ServerTypeChoice = isServerTypeChoice(storedServerTypeChoice)
+    ? storedServerTypeChoice
+    : 'auto';
+  let serverType: MediaServerType = 'jellyfin';
   let accessToken = '';
   let userId = '';
   let userName = '';
@@ -36,25 +52,37 @@
   let selectedLibraryIds: string[] = [];
 
   onMount(async () => {
-    if (serverUrl) return;
-
     try {
       const response = await fetch('/config.json');
       if (!response.ok) {
         throw new Error(`Request failed with status ${response.status}`);
       }
 
-      const config: { jellyfinUrl?: unknown } = await response.json();
-      if (typeof config.jellyfinUrl !== 'string' || !config.jellyfinUrl.trim()) {
-        throw new Error('The server returned an invalid Jellyfin URL.');
+      const config: {
+        serverUrl?: unknown;
+        serverType?: unknown;
+        mediaServerUrl?: unknown;
+        jellyfinUrl?: unknown;
+      } = await response.json();
+      const configuredUrl = config.serverUrl ?? config.mediaServerUrl ?? config.jellyfinUrl;
+      if (!serverUrl) {
+        if (typeof configuredUrl !== 'string' || !configuredUrl.trim()) {
+          throw new Error('The server returned an invalid media server URL.');
+        }
+        serverUrl = configuredUrl;
       }
 
-      if (!serverUrl) serverUrl = config.jellyfinUrl;
+      if (!isServerTypeChoice(storedServerTypeChoice)) {
+        if (config.serverType !== undefined && !isServerTypeChoice(config.serverType)) {
+          throw new Error('The server returned an invalid server type.');
+        }
+        serverTypeChoice = isServerTypeChoice(config.serverType) ? config.serverType : 'auto';
+      }
     } catch (caught) {
       error =
         caught instanceof Error
-          ? `Could not load the default Jellyfin URL: ${caught.message}`
-          : 'Could not load the default Jellyfin URL.';
+          ? `Could not load server configuration: ${caught.message}`
+          : 'Could not load server configuration.';
     }
   });
 
@@ -68,14 +96,43 @@
 
     try {
       const normalized = normalizeServerUrl(serverUrl);
-      const anonymousClient = new JellyfinClient(normalized);
-      info = await anonymousClient.getPublicInfo();
-      const auth = await anonymousClient.authenticate(username.trim(), password);
+      serverUrl = normalized;
+      localStorage.setItem('jellytube.lastServerUrl', normalized);
+      localStorage.setItem('jellytube.lastUsername', username.trim());
+      localStorage.setItem(SERVER_TYPE_CHOICE_KEY, serverTypeChoice);
+
+      const publicClient = new JellyfinClient(normalized);
+      info = await publicClient.getPublicInfo();
+      serverType =
+        serverTypeChoice === 'auto' ? detectMediaServerType(info) : serverTypeChoice;
+      const client = new JellyfinClient(normalized, undefined, undefined, serverType);
+      const auth = await client.authenticate(username.trim(), password);
 
       assertUserCanPlayMedia(auth.User);
 
-      const client = anonymousClient.withAuth(auth.AccessToken, auth.User.Id);
-      const views = await client.getViews(auth.User.Id);
+      let authenticatedClient = client.withAuth(auth.AccessToken, auth.User.Id);
+      let views: Awaited<ReturnType<typeof client.getViews>>;
+      try {
+        views = await authenticatedClient.getViews(auth.User.Id);
+      } catch (caught) {
+        if (
+          serverTypeChoice !== 'auto' ||
+          !(caught instanceof JellyfinError) ||
+          caught.status !== 401
+        ) {
+          throw caught;
+        }
+
+        serverType = serverType === 'emby' ? 'jellyfin' : 'emby';
+        authenticatedClient = new JellyfinClient(
+          normalized,
+          auth.AccessToken,
+          auth.User.Id,
+          serverType
+        );
+        views = await authenticatedClient.getViews(auth.User.Id);
+      }
+
       libraries = views.Items.filter(isEligibleLibrary);
       if (libraries.length === 0) {
         throw new JellyfinError('No supported Shows, Home Videos & Photos, Movies, or Music Videos libraries were found for this user.');
@@ -86,13 +143,11 @@
       accessToken = auth.AccessToken;
       userId = auth.User.Id;
       userName = auth.User.Name;
-      localStorage.setItem('jellytube.lastServerUrl', normalized);
-      localStorage.setItem('jellytube.lastUsername', username.trim());
     } catch (caught) {
       error =
         caught instanceof JellyfinError || caught instanceof Error
           ? caught.message
-          : 'Could not sign in to Jellyfin.';
+          : 'Could not sign in to the media server.';
     } finally {
       loading = false;
     }
@@ -112,12 +167,13 @@
       .map(libraryToSelectedSource)
       .filter((library) => library !== null);
     if (selectedLibraries.length === 0) {
-      error = 'Select at least one supported Jellyfin library.';
+      error = 'Select at least one supported library.';
       return;
     }
     dispatch('ready', {
       serverUrl,
-      serverName: info?.ServerName ?? 'Jellyfin',
+      serverType,
+      serverName: info?.ServerName ?? (serverType === 'emby' ? 'Emby' : 'Jellyfin'),
       serverVersion: info?.Version,
       accessToken,
       userId,
@@ -135,7 +191,7 @@
         <Film size={28} />
       </div>
       <div>
-        <p class="eyebrow">Jellyfin for YouTube archives</p>
+        <p class="eyebrow">Your media server for YouTube archives</p>
         <h1 id="onboarding-title">JellyTube</h1>
       </div>
     </div>
@@ -147,6 +203,18 @@
           <div class="field-shell">
             <Server size={18} />
             <input bind:value={serverUrl} placeholder="http://jellyfin.local:8096" autocomplete="url" />
+          </div>
+        </label>
+
+        <label>
+          <span>Server type</span>
+          <div class="field-shell">
+            <Server size={18} />
+            <select bind:value={serverTypeChoice}>
+              <option value="auto">Auto-detect</option>
+              <option value="jellyfin">Jellyfin</option>
+              <option value="emby">Emby</option>
+            </select>
           </div>
         </label>
 
@@ -184,7 +252,7 @@
       </form>
 
       <div class="requirements">
-        <div><CheckCircle2 size={17} /> Jellyfin account with media playback access</div>
+        <div><CheckCircle2 size={17} /> Jellyfin or Emby account with media playback access</div>
         <div><CheckCircle2 size={17} /> Playback Reporting plugin optional</div>
         <div><CheckCircle2 size={17} /> Select video, movie, or music video libraries</div>
       </div>
@@ -192,7 +260,10 @@
       <div class="library-step">
         <div class="success-strip">
           <CheckCircle2 size={18} />
-          <span>{info?.ServerName ?? 'Jellyfin'} {info?.Version ? `(${info.Version})` : ''}</span>
+          <span>
+            {serverType === 'emby' ? 'Emby' : 'Jellyfin'} · {info?.ServerName ?? 'Media server'}
+            {info?.Version ? ` (${info.Version})` : ''}
+          </span>
         </div>
 
         <div class="library-grid">

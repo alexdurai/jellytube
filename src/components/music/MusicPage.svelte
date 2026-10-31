@@ -586,7 +586,7 @@
   <div class="empty-state music-empty">
     <Music2 size={40} />
     <h2>No music library connected</h2>
-    <p>Add a Jellyfin <strong>Music</strong> library to browse albums, artists, and songs here.</p>
+    <p>Add a Jellyfin or Emby <strong>Music</strong> library to browse albums, artists, and songs here.</p>
   </div>
 {:else if error && !activeAlbum && !activeArtist}
   <div class="empty-state music-empty">

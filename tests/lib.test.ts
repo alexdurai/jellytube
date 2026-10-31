@@ -13,7 +13,12 @@ import {
   isHoverPreviewEligible,
   previewHlsOptions
 } from '../src/lib/hoverPreview';
-import { assertUserCanPlayMedia, browserDeviceProfile, JellyfinClient } from '../src/lib/jellyfin';
+import {
+  assertUserCanPlayMedia,
+  browserDeviceProfile,
+  detectMediaServerType,
+  JellyfinClient
+} from '../src/lib/jellyfin';
 import {
   canDirectPlaySource,
   detectHlsRemuxCapabilities,
@@ -95,6 +100,7 @@ import {
   shouldShowSkipIntro
 } from '../src/lib/intros';
 import { trickplayResolutionForSource, trickplayTileAt } from '../src/lib/trickplay';
+import { embyTrickplayFrameAt, parseEmbyBif } from '../src/lib/embyTrickplay';
 import { showProgressForEpisodes } from '../src/lib/showProgress';
 import {
   countdownSecondsRemaining,
@@ -273,7 +279,7 @@ test('Jellyfin user playback guard rejects users with media playback disabled', 
       Policy: { IsAdministrator: true, EnableMediaPlayback: false }
     }),
     (error) => error instanceof Error
-      && error.message === 'This Jellyfin account is not allowed to play media.'
+      && error.message === 'This account is not allowed to play media.'
   );
 });
 
@@ -763,6 +769,7 @@ test('playback quality options use bitrate labels and filter above source resolu
   const options = playbackQualityOptions(source, { directAvailable: true });
 
   assert.deepEqual(options.map((option) => option.label), ['Auto', 'Original', '4 Mbps', '2 Mbps', '1 Mbps']);
+  assert.equal(playbackQualityOptions(source)[0].detail, 'Server managed');
   assert.equal(options[1].detail, '720p · 9.5 Mbps');
   assert.equal(playbackQualityById(options, 'hls-20000k')?.id, 'auto');
   assert.equal(playbackQualityById(options, 'hls-4000k')?.videoBitrate, 4_000_000);
@@ -2548,7 +2555,7 @@ test('Jellyfin discovery requests keep detail fields isolated and tokens out of 
     assert.equal(imageUrl.pathname, '/Items/person-1/Images/Primary');
     assert.equal(imageUrl.searchParams.get('fillWidth'), '320');
     assert.equal(imageUrl.searchParams.get('quality'), '90');
-    assert.equal(imageUrl.searchParams.get('api_key'), 'access-token');
+    assert.equal(imageUrl.searchParams.get('ApiKey'), 'access-token');
     const trickplayUrl = new URL(client.getTrickplayImageUrl('movie-1', 'movie-1', 320, 2));
     assert.equal(trickplayUrl.pathname, '/Videos/movie-1/Trickplay/320/2.jpg');
     assert.equal(trickplayUrl.searchParams.has('mediaSourceId'), false);
@@ -2565,6 +2572,188 @@ test('Jellyfin discovery requests keep detail fields isolated and tokens out of 
       Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalLocalStorage });
     }
   }
+});
+
+test('media server detection recognizes Jellyfin and Emby public info', () => {
+  assert.equal(detectMediaServerType({ ProductName: 'Jellyfin Server' }), 'jellyfin');
+  assert.equal(detectMediaServerType({ ProductName: 'Emby Server' }), 'emby');
+  assert.equal(detectMediaServerType({ ProductName: 'Emby' }), 'emby');
+  assert.equal(detectMediaServerType({ WanAddress: '' }), 'jellyfin');
+  assert.equal(detectMediaServerType({ ServerName: 'My Media Server' }), 'jellyfin');
+});
+
+test('movie collection lookup returns the containing BoxSet and its movies', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLocalStorage = globalThis.localStorage;
+  const requests: URL[] = [];
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: () => 'test-device',
+      setItem: () => undefined
+    }
+  });
+  globalThis.fetch = async (input) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
+    requests.push(url);
+    const items = url.searchParams.get('IncludeItemTypes') === 'BoxSet'
+      ? [{ Id: 'collection-1', Name: 'Saga', Type: 'BoxSet', ChildCount: 2 }]
+      : [
+          { Id: 'movie-1', Name: 'First Movie', Type: 'Movie' },
+          { Id: 'movie-2', Name: 'Second Movie', Type: 'Movie' }
+        ];
+    return new Response(JSON.stringify({ Items: items, TotalRecordCount: items.length }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  };
+
+  try {
+    const client = new JellyfinClient('http://jellyfin.test', 'access-token', 'user-1');
+    const collections = await client.getMovieCollections('movie-1', 'library-1', 'Movies');
+    assert.equal(collections.length, 1);
+    assert.equal(collections[0].collection.Name, 'Saga');
+    assert.deepEqual(collections[0].items.map((movie) => movie.Id), ['movie-1', 'movie-2']);
+    assert.equal(collections[0].items[0].sourceLibraryName, 'Movies');
+    assert.equal(collections[0].items[0].contentKind, 'movie');
+    assert.equal(requests[0].searchParams.get('ParentId'), 'library-1');
+    assert.equal(requests[1].searchParams.get('ParentId'), 'collection-1');
+    assert.equal(requests[1].searchParams.get('IncludeItemTypes'), 'Movie');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocalStorage === undefined) {
+      delete (globalThis as { localStorage?: Storage }).localStorage;
+    } else {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: originalLocalStorage
+      });
+    }
+  }
+});
+
+test('Emby authenticated requests include token and client identity', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLocalStorage = globalThis.localStorage;
+  let requestHeaders: HeadersInit | undefined;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: () => 'test-device',
+      setItem: () => undefined
+    }
+  });
+  globalThis.fetch = async (_input, init) => {
+    requestHeaders = init?.headers;
+    return new Response(JSON.stringify({ Items: [], TotalRecordCount: 0 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  };
+
+  try {
+    const client = new JellyfinClient('http://emby.test', 'emby-token', 'user-1', 'emby');
+    await client.getViews('user-1');
+    const headers = new Headers(requestHeaders);
+    assert.match(headers.get('Authorization') ?? '', /Client="JellyTube"/);
+    assert.match(headers.get('Authorization') ?? '', /Token="emby-token"/);
+    assert.equal(headers.get('X-Emby-Authorization'), headers.get('Authorization'));
+    assert.match(client.authHeader, /Token="emby-token"/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocalStorage === undefined) {
+      delete (globalThis as { localStorage?: Storage }).localStorage;
+    } else {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: originalLocalStorage
+      });
+    }
+  }
+});
+
+test('Emby client uses Emby token query casing and omits unsupported trickplay fields', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLocalStorage = globalThis.localStorage;
+  const requests: string[] = [];
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: () => 'test-device',
+      setItem: () => undefined
+    }
+  });
+  globalThis.fetch = async (input) => {
+    requests.push(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
+    return new Response(JSON.stringify({
+      Id: 'item-1',
+      Name: 'Item',
+      Type: 'Movie',
+      MediaSources: [],
+      Items: []
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  };
+
+  try {
+    const client = new JellyfinClient('http://emby.test', 'emby-token', 'user-1', 'emby');
+    const itemImage = new URL(client.getImageUrl({
+      Id: 'item-1',
+      ImageTags: { Primary: 'tag' }
+    }));
+    assert.equal(itemImage.searchParams.get('api_key'), 'emby-token');
+    assert.equal(itemImage.searchParams.has('ApiKey'), false);
+
+    await client.getItem('item-1');
+    const detailUrl = new URL(requests[0]);
+    assert.ok(!detailUrl.searchParams.get('Fields')?.split(',').includes('Trickplay'));
+
+    const trickplayUrl = new URL(client.getTrickplayImageUrl('item-1', 'item-1', 320, 0));
+    assert.equal(trickplayUrl.pathname, '/Videos/item-1/Trickplay/320/0.jpg');
+    assert.equal(trickplayUrl.searchParams.get('api_key'), 'emby-token');
+    const bifUrl = new URL(client.getEmbyTrickplayUrl('item-1'));
+    assert.equal(bifUrl.pathname, '/Videos/item-1/index.bif');
+    assert.equal(bifUrl.searchParams.get('api_key'), 'emby-token');
+    assert.equal(client.withAuth('next-token', 'user-2').serverType, 'emby');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocalStorage === undefined) {
+      delete (globalThis as { localStorage?: Storage }).localStorage;
+    } else {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: originalLocalStorage
+      });
+    }
+  }
+});
+
+test('Emby BIF trickplay frames parse and resolve by timestamp', () => {
+  const imageCount = 2;
+  const tableEnd = 64 + (imageCount + 1) * 8;
+  const buffer = new ArrayBuffer(tableEnd + 5);
+  const bytes = new Uint8Array(buffer);
+  const data = new DataView(buffer);
+  bytes.set([0x89, 0x42, 0x49, 0x46, 0x0d, 0x0a, 0x1a, 0x0a]);
+  data.setUint32(12, imageCount, true);
+  data.setUint32(16, 1000, true);
+  data.setUint32(64, 0, true);
+  data.setUint32(68, tableEnd, true);
+  data.setUint32(72, 5, true);
+  data.setUint32(76, tableEnd + 2, true);
+  data.setUint32(84, tableEnd + 5, true);
+  bytes.set([1, 2, 3, 4, 5], tableEnd);
+
+  const frames = parseEmbyBif(buffer);
+  assert.equal(frames.length, 2);
+  assert.deepEqual([...frames[0].bytes], [1, 2]);
+  assert.deepEqual([...frames[1].bytes], [3, 4, 5]);
+  assert.equal(embyTrickplayFrameAt(frames, 4.9), frames[0]);
+  assert.equal(embyTrickplayFrameAt(frames, 5), frames[1]);
+  assert.equal(embyTrickplayFrameAt(frames, -1), undefined);
+  assert.deepEqual(parseEmbyBif(new ArrayBuffer(8)), []);
 });
 
 test('Jellyfin trickplay resolution and sprite index follow the selected media source', () => {
@@ -2682,8 +2871,23 @@ test('Jellyfin playback requests carry selected audio indexes through negotiatio
     assert.equal(negotiatedUrl.searchParams.get('ApiKey'), 'server-key');
     assert.equal(negotiatedUrl.searchParams.has('api_key'), false);
     assert.equal(
-      new URL(client.getPlaybackUrl('/videos/video-1/master.m3u8')).searchParams.get('api_key'),
+      new URL(client.getPlaybackUrl('/videos/video-1/master.m3u8')).searchParams.get('ApiKey'),
       'access-token'
+    );
+
+    const embyClient = new JellyfinClient(
+      'http://emby.test',
+      'emby-token',
+      'user-1',
+      'emby'
+    );
+    assert.equal(
+      new URL(embyClient.getPlaybackUrl('/videos/video-1/master.m3u8')).searchParams.get('api_key'),
+      'emby-token'
+    );
+    assert.equal(
+      new URL(embyClient.getHlsUrl('video-1', 'source-1')).searchParams.get('api_key'),
+      'emby-token'
     );
   } finally {
     globalThis.fetch = originalFetch;

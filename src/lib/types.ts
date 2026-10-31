@@ -19,10 +19,13 @@ export type PublicServerInfo = {
   LocalAddress?: string;
   ServerName?: string;
   Version?: string;
-  ProductName?: string;
+  ProductName?: string | null;
+  WanAddress?: string | null;
   Id?: string;
   StartupWizardCompleted?: boolean;
 };
+
+export type MediaServerType = 'jellyfin' | 'emby';
 
 export type JellyfinLibrary = {
   Id: string;
@@ -229,6 +232,7 @@ export type PlaybackActivity = {
 
 export type AppSession = {
   serverUrl: string;
+  serverType?: MediaServerType;
   serverName: string;
   serverVersion?: string;
   accessToken: string;

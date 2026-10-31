@@ -15,8 +15,7 @@
     RotateCcw,
     Search,
     Star,
-    Sun,
-    UserCircle
+    Sun
   } from 'lucide-svelte';
   import {
     channelDirectoryEntries,
@@ -125,7 +124,12 @@
   const FAVORITE_MUSIC_MIXES_KEY = `jellytube.favoriteMusicMixes.${session.serverUrl}.${session.userId}`;
 
   const dispatch = createEventDispatcher<{ logout: void }>();
-  const client = new JellyfinClient(session.serverUrl, session.accessToken, session.userId);
+  const client = new JellyfinClient(
+    session.serverUrl,
+    session.accessToken,
+    session.userId,
+    session.serverType ?? 'jellyfin'
+  );
 
   let loading = true;
   let catalogReady = false;
@@ -679,7 +683,7 @@
       if (loadGeneration !== catalogLoadGeneration) return;
       failPendingHomeSections();
       if (!progressivelyRenderHome) {
-        error = caught instanceof Error ? caught.message : 'Could not load Jellyfin libraries.';
+        error = caught instanceof Error ? caught.message : 'Could not load media server libraries.';
       }
     } finally {
       if (loadGeneration === catalogLoadGeneration) {
@@ -1574,7 +1578,7 @@
         .map(libraryToSelectedSource)
         .filter((library) => library !== null);
     } catch (caught) {
-      librarySettingsError = caught instanceof Error ? caught.message : 'Could not load Jellyfin libraries.';
+      librarySettingsError = caught instanceof Error ? caught.message : 'Could not load media server libraries.';
     } finally {
       librarySettingsLoading = false;
     }
@@ -2376,8 +2380,17 @@
           <Sun size={19} />
         {/if}
       </button>
-      <div class="account-pill" title={`${session.serverName} · ${session.userName}`}>
-        <UserCircle size={18} />
+      <div
+        class="account-pill"
+        title={`${session.serverName} - ${session.userName} on ${session.serverType === 'emby' ? 'Emby' : 'Jellyfin'}`}
+      >
+        {#if session.serverType === 'emby'}
+          <span class="server-brand-mark emby" aria-label="Emby server">E</span>
+        {:else}
+          <span class="server-brand-mark jellyfin" aria-label="Jellyfin server">
+            <img src="/jellyfin-mark.svg" alt="" />
+          </span>
+        {/if}
         <span>{session.userName}</span>
       </div>
     </div>
@@ -2456,6 +2469,7 @@
           nextUpItem={activePlaybackNextUp}
           on:back={goBackOrHome}
           on:recommendationSelect={(event) => handleRecommendationSelect(event.detail)}
+          on:relatedSelect={(event) => playItemFromPlayer(event.detail)}
           on:nextUpSelect={(event) => playItemFromPlayer(event.detail)}
           on:queueSelect={(event) => playItemFromPlayer(event.detail, watchQueue, watchQueueTitle, true)}
           on:episodeSelect={(event) => playItemFromPlayer(event.detail, watchQueue, watchQueueTitle, true)}
@@ -2628,7 +2642,7 @@
         <MusicPage {client} sources={audioSources} item={musicItem} on:navigate={(event) => onMusicNavigate(event.detail)} />
       {:else}
         <div class="empty-state">
-          <p>Add a Jellyfin <strong>Music</strong> library to use the audio player.</p>
+          <p>Add a Jellyfin or Emby <strong>Music</strong> library to use the audio player.</p>
         </div>
       {/if}
     {:else if route === 'musicvideos'}

@@ -158,13 +158,18 @@ label {
   box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.12);
 }
 
-.field-shell input {
+.field-shell input,
+.field-shell select {
   min-width: 0;
   width: 100%;
   border: 0;
   outline: 0;
   color: var(--text);
   background: transparent;
+}
+
+.field-shell select {
+  height: 100%;
 }
 
 .primary-action,
@@ -508,6 +513,34 @@ label {
 .account-pill span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.account-pill .server-brand-mark {
+  width: 23px;
+  height: 23px;
+  flex: 0 0 23px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  color: #fff;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.account-pill .server-brand-mark.jellyfin {
+  background: #00a4dc;
+}
+
+.account-pill .server-brand-mark.emby {
+  background: #52b54b;
+  font-size: 15px;
+}
+
+.account-pill .server-brand-mark img {
+  display: block;
+  width: 15px;
+  height: 15px;
 }
 
 .sidebar {
@@ -2750,6 +2783,33 @@ label {
   width: min(360px, calc(100vw - 24px));
 }
 
+.caption-size-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 9px 10px;
+  color: #fff;
+  font-size: 0.86rem;
+}
+
+.caption-size-setting select {
+  min-width: 118px;
+  padding: 6px 26px 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
+  color: #fff;
+  background: #262626;
+  font: inherit;
+}
+
+.caption-size-note {
+  margin: 0;
+  padding: 0 9px 9px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.76rem;
+}
+
 .aspect-menu {
   width: min(310px, calc(100vw - 24px));
   max-height: min(62vh, calc(100cqh - 52px));
@@ -2961,6 +3021,34 @@ label {
 .episode-shelf {
   position: relative;
   margin-top: 22px;
+}
+
+.movie-collection-shelf {
+  margin-top: 24px;
+}
+
+.movie-collection-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.movie-collection-heading h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.movie-collection-heading span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.movie-collection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(150px, 42vw), 1fr));
+  gap: 18px 14px;
 }
 
 .episode-shelf-heading {

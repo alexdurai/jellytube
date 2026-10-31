@@ -8,11 +8,21 @@ const rootDir = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const distDir = resolve(process.env.JELLYTUBE_DIST || join(rootDir, 'dist'));
 const host = process.env.JELLYTUBE_HOST || '0.0.0.0';
 const port = Number(process.env.JELLYTUBE_PORT || process.env.PORT || 4173);
-const jellyfinUrl = process.env.JELLYFIN_URL || 'http://localhost:8096';
+const serverUrl =
+  process.env.SERVER_URL ||
+  process.env.MEDIA_SERVER_URL ||
+  process.env.JELLYFIN_URL ||
+  'http://localhost:8096';
+const serverType = process.env.SERVER_TYPE || 'auto';
 const indexPath = join(distDir, 'index.html');
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   console.error(`Invalid JELLYTUBE_PORT: ${process.env.JELLYTUBE_PORT}`);
+  process.exit(1);
+}
+
+if (serverType !== 'auto' && serverType !== 'emby' && serverType !== 'jellyfin') {
+  console.error('Invalid SERVER_TYPE. Expected "auto", "emby", or "jellyfin".');
   process.exit(1);
 }
 
@@ -34,7 +44,12 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.url === '/config.json') {
-      sendJson(response, 200, { jellyfinUrl });
+      sendJson(response, 200, {
+        serverUrl,
+        serverType,
+        mediaServerUrl: serverUrl,
+        jellyfinUrl: serverUrl
+      });
       return;
     }
 
