@@ -8,6 +8,7 @@ const rootDir = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const distDir = resolve(process.env.JELLYTUBE_DIST || join(rootDir, 'dist'));
 const host = process.env.JELLYTUBE_HOST || '0.0.0.0';
 const port = Number(process.env.JELLYTUBE_PORT || process.env.PORT || 4173);
+const jellyfinUrl = process.env.JELLYFIN_URL || 'http://localhost:8096';
 const indexPath = join(distDir, 'index.html');
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -29,6 +30,11 @@ const server = createServer(async (request, response) => {
 
     if (request.url === '/healthz') {
       sendJson(response, 200, { ok: true, app: 'jellytube' });
+      return;
+    }
+
+    if (request.url === '/config.json') {
+      sendJson(response, 200, { jellyfinUrl });
       return;
     }
 

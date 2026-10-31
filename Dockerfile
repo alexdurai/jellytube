@@ -26,10 +26,6 @@ RUN mkdir -p \
     /app/screenshots
 
 ENV NODE_ENV=production
-ENV JELLYTUBE_HOST=0.0.0.0
-ENV JELLYTUBE_PORT=4173
-ENV JELLYTUBE_DIST=/app/dist
-ENV JELLYTUBE_RUNTIME_DIR=/app/runtime
 
 EXPOSE 4173
 

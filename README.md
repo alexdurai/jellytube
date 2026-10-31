@@ -326,10 +326,13 @@ The production server reads these optional environment variables:
 | --- | --- | --- |
 | `JELLYTUBE_HOST` | `0.0.0.0` | Host/IP address for the production server to bind. |
 | `JELLYTUBE_PORT` | `4173` | Port for the production server. |
+| `JELLYFIN_URL` | `http://localhost:8096` | Default Jellyfin server URL prefilled during onboarding. |
 | `JELLYTUBE_DIST` | `dist` | Directory containing the built frontend. |
 | `JELLYTUBE_RUNTIME_DIR` | `.jellytube` | Runtime directory used by quick setup. |
 | `JELLYTUBE_PID_FILE` | `.jellytube/jellytube.pid` | PID file for the detached server. |
 | `JELLYTUBE_LOG_FILE` | `.jellytube/jellytube.log` | Log file for the detached server. |
+
+For Docker, set `JELLYFIN_URL` to the URL reachable from the user's browser, for example with `-e JELLYFIN_URL=http://192.168.1.20:8096`.
 
 ## Data And Security Notes
 

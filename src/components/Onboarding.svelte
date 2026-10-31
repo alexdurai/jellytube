@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import {
     CheckCircle2,
     Film,
@@ -34,6 +34,29 @@
   let userName = '';
   let libraries: JellyfinLibrary[] = [];
   let selectedLibraryIds: string[] = [];
+
+  onMount(async () => {
+    if (serverUrl) return;
+
+    try {
+      const response = await fetch('/config.json');
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
+      const config: { jellyfinUrl?: unknown } = await response.json();
+      if (typeof config.jellyfinUrl !== 'string' || !config.jellyfinUrl.trim()) {
+        throw new Error('The server returned an invalid Jellyfin URL.');
+      }
+
+      if (!serverUrl) serverUrl = config.jellyfinUrl;
+    } catch (caught) {
+      error =
+        caught instanceof Error
+          ? `Could not load the default Jellyfin URL: ${caught.message}`
+          : 'Could not load the default Jellyfin URL.';
+    }
+  });
 
   $: canSubmit = serverUrl.trim().length > 0 && username.trim().length > 0 && password.length > 0;
 
