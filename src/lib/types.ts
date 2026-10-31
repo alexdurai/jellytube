@@ -53,6 +53,18 @@ export type JellyfinUserData = {
   ItemId?: string;
 };
 
+export type JellyfinTrickplayInfo = {
+  Width: number;
+  Height: number;
+  TileWidth: number;
+  TileHeight: number;
+  ThumbnailCount: number;
+  Interval: number;
+  Bandwidth: number;
+};
+
+export type JellyfinTrickplayManifest = Record<string, Record<string, JellyfinTrickplayInfo>>;
+
 export type JellyfinMediaStream = {
   Type?: 'Video' | 'Audio' | 'Subtitle';
   Codec?: string;
@@ -181,6 +193,7 @@ export type JellyfinItem = {
   MediaSources?: JellyfinMediaSource[];
   People?: JellyfinPerson[];
   Chapters?: JellyfinChapter[];
+  Trickplay?: JellyfinTrickplayManifest;
   sourceLibraryId?: string;
   sourceLibraryName?: string;
   sourceCollectionType?: string;

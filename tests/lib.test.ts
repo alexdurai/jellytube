@@ -94,6 +94,7 @@ import {
   introWindowFromSegments,
   shouldShowSkipIntro
 } from '../src/lib/intros';
+import { trickplayResolutionForSource, trickplayTileAt } from '../src/lib/trickplay';
 import { showProgressForEpisodes } from '../src/lib/showProgress';
 import {
   countdownSecondsRemaining,
@@ -2521,6 +2522,7 @@ test('Jellyfin discovery requests keep detail fields isolated and tokens out of 
     assert.equal(detailUrl.pathname, '/Users/user-1/Items/movie-1');
     assert.ok(detailUrl.searchParams.get('Fields')?.split(',').includes('People'));
     assert.ok(detailUrl.searchParams.get('Fields')?.split(',').includes('MediaSources'));
+    assert.ok(detailUrl.searchParams.get('Fields')?.split(',').includes('Trickplay'));
 
     const similarUrl = new URL(requests[4]);
     assert.equal(similarUrl.pathname, '/Items/movie-1/Similar');
@@ -2547,6 +2549,14 @@ test('Jellyfin discovery requests keep detail fields isolated and tokens out of 
     assert.equal(imageUrl.searchParams.get('fillWidth'), '320');
     assert.equal(imageUrl.searchParams.get('quality'), '90');
     assert.equal(imageUrl.searchParams.get('api_key'), 'access-token');
+    const trickplayUrl = new URL(client.getTrickplayImageUrl('movie-1', 'movie-1', 320, 2));
+    assert.equal(trickplayUrl.pathname, '/Videos/movie-1/Trickplay/320/2.jpg');
+    assert.equal(trickplayUrl.searchParams.has('mediaSourceId'), false);
+    assert.equal(trickplayUrl.searchParams.get('ApiKey'), 'access-token');
+    const alternateTrickplayUrl = new URL(
+      client.getTrickplayImageUrl('movie-1', 'alternate-source', 320, 2)
+    );
+    assert.equal(alternateTrickplayUrl.searchParams.get('mediaSourceId'), 'alternate-source');
   } finally {
     globalThis.fetch = originalFetch;
     if (originalLocalStorage === undefined) {
@@ -2555,6 +2565,52 @@ test('Jellyfin discovery requests keep detail fields isolated and tokens out of 
       Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalLocalStorage });
     }
   }
+});
+
+test('Jellyfin trickplay resolution and sprite index follow the selected media source', () => {
+  const manifest = {
+    'source-1': {
+      '160': {
+        Width: 160,
+        Height: 90,
+        TileWidth: 10,
+        TileHeight: 10,
+        ThumbnailCount: 250,
+        Interval: 10000,
+        Bandwidth: 1000
+      },
+      '320': {
+        Width: 320,
+        Height: 180,
+        TileWidth: 5,
+        TileHeight: 5,
+        ThumbnailCount: 250,
+        Interval: 10000,
+        Bandwidth: 2000
+      }
+    },
+    'source-2': {
+      '320': {
+        Width: 320,
+        Height: 180,
+        TileWidth: 4,
+        TileHeight: 4,
+        ThumbnailCount: 100,
+        Interval: 5000,
+        Bandwidth: 2000
+      }
+    }
+  };
+
+  assert.equal(trickplayResolutionForSource(manifest, 'missing'), undefined);
+  assert.equal(trickplayResolutionForSource(manifest, 'source-1')?.width, 320);
+  assert.equal(trickplayResolutionForSource(manifest, 'source-1', 640)?.width, 320);
+  assert.deepEqual(trickplayTileAt(manifest['source-1']['320'], 250), {
+    index: 1,
+    column: 0,
+    row: 0
+  });
+  assert.equal(trickplayTileAt(manifest['source-1']['320'], 2500), undefined);
 });
 
 test('Jellyfin playback requests carry selected audio indexes through negotiation and HLS', async () => {

@@ -92,6 +92,7 @@
     JellyfinMediaStream,
     JellyfinPerson
   } from '../lib/types';
+  import { trickplayResolutionForSource, trickplayTileAt } from '../lib/trickplay';
   import {
     canDirectPlaySource,
     detectHlsRemuxCapabilities,
@@ -299,6 +300,10 @@
   let volume = savedVolume();
   let currentTime = 0;
   let hoveredSectionIndex = -1;
+  let hoveredSeekSeconds = -1;
+  let hoveredSeekPercent = 0;
+  let trickplayImageFailed = false;
+  let previousTrickplayImageUrl = '';
   let introDismissed = false;
   let introSegments: JellyfinMediaSegment[] | null = null;
   let duration = 0;
@@ -319,10 +324,31 @@
   $: seekMax = durationSeconds || 0;
   $: chapters = useWatchChapters(detailedItem, durationSeconds);
   $: activeChapterIndex = chapterIndexAt(chapters, currentTime);
-  $: hoveredSectionCenterPct = (() => {
-    const c = hoveredSectionIndex >= 0 ? chapters[hoveredSectionIndex] : undefined;
-    return c && durationSeconds > 0 ? ((c.start + c.end) / 2 / durationSeconds) * 100 : 0;
-  })();
+  $: trickplayResolution = trickplayResolutionForSource(
+    detailedItem.Trickplay,
+    mediaSource?.Id
+  );
+  $: hoveredTrickplayTile =
+    trickplayResolution && hoveredSeekSeconds >= 0
+      ? trickplayTileAt(trickplayResolution.info, hoveredSeekSeconds)
+      : undefined;
+  $: hoveredTrickplayUrl =
+    trickplayResolution && hoveredTrickplayTile && mediaSource
+      ? client.getTrickplayImageUrl(
+          detailedItem.Id,
+          mediaSource.Id,
+          trickplayResolution.width,
+          hoveredTrickplayTile.index
+        )
+      : '';
+  $: if (hoveredTrickplayUrl !== previousTrickplayImageUrl) {
+    previousTrickplayImageUrl = hoveredTrickplayUrl;
+    trickplayImageFailed = false;
+  }
+  $: trickplaySpriteStyle =
+    trickplayResolution && hoveredTrickplayTile
+      ? `width: ${trickplayResolution.info.TileWidth * 100}%; height: ${trickplayResolution.info.TileHeight * 100}%; transform: translate(-${(hoveredTrickplayTile.column / trickplayResolution.info.TileWidth) * 100}%, -${(hoveredTrickplayTile.row / trickplayResolution.info.TileHeight) * 100}%)`
+      : '';
   $: sourceLabel = activeAttempt?.label ?? 'Preparing';
   $: playbackFormatLogo = activePlaybackFormatLogo(
     mediaSource,
@@ -1759,16 +1785,32 @@
   function onSeekPointerMove(event: PointerEvent) {
     if (!durationSeconds) {
       hoveredSectionIndex = -1;
+      hoveredSeekSeconds = -1;
       return;
     }
     const wrap = event.currentTarget as HTMLElement;
     const rect = wrap.getBoundingClientRect();
-    const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
-    hoveredSectionIndex = chapterIndexAt(chapters, ratio * durationSeconds);
+    const ratio =
+      rect.width > 0
+        ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+        : 0;
+    hoveredSeekSeconds = ratio * durationSeconds;
+    const tooltipHalfWidth = Math.min(120, window.innerWidth * 0.23, rect.width / 2);
+    const edgeInsetPercent = rect.width > 0 ? (tooltipHalfWidth / rect.width) * 100 : 50;
+    hoveredSeekPercent = Math.min(100 - edgeInsetPercent, Math.max(edgeInsetPercent, ratio * 100));
+    hoveredSectionIndex = chapterIndexAt(chapters, hoveredSeekSeconds);
   }
 
   function resetSeekHover() {
     hoveredSectionIndex = -1;
+    hoveredSeekSeconds = -1;
+  }
+
+  function handleTrickplayImageError(event: Event) {
+    const image = event.currentTarget;
+    if (image instanceof HTMLImageElement && image.currentSrc === hoveredTrickplayUrl) {
+      trickplayImageFailed = true;
+    }
   }
 
   function toggleMute() {
@@ -2436,14 +2478,31 @@
                 on:input={handleSeekInput}
                 on:pointerdown={showControls}
               />
-              {#if chapters.length > 1}
+              {#if hoveredSeekSeconds >= 0}
                 <div
-                  class:visible={hoveredSectionIndex >= 0}
-                  class="seek-section-tip"
+                  class:visible={hoveredSeekSeconds >= 0}
+                  class="seek-preview-tooltip"
                   role="tooltip"
-                  style={`left: ${hoveredSectionCenterPct}%`}
+                  style={`left: ${hoveredSeekPercent}%`}
                 >
-                  {hoveredSectionIndex >= 0 ? chapters[hoveredSectionIndex].name : ''}
+                  {#if hoveredTrickplayTile && trickplayResolution && !trickplayImageFailed}
+                    <span
+                      class="seek-preview-image"
+                      style={`aspect-ratio: ${trickplayResolution.info.Width} / ${trickplayResolution.info.Height}`}
+                    >
+                      <img
+                        src={hoveredTrickplayUrl}
+                        alt={`Preview at ${formatClock(hoveredSeekSeconds)}`}
+                        style={trickplaySpriteStyle}
+                        draggable="false"
+                        on:error={handleTrickplayImageError}
+                      />
+                    </span>
+                  {/if}
+                  {#if hoveredSectionIndex >= 0}
+                    <span class="seek-preview-chapter">{chapters[hoveredSectionIndex].name}</span>
+                  {/if}
+                  <span class="seek-preview-time">{formatClock(hoveredSeekSeconds)}</span>
                 </div>
               {/if}
             </div>

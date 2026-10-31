@@ -372,7 +372,7 @@ export class JellyfinClient {
   async getItem(itemId: string) {
     if (!this.userId) throw new JellyfinError('Missing Jellyfin user id');
     return this.get<JellyfinItem>(`/Users/${this.userId}/Items/${itemId}`, {
-      Fields: `${itemFields},People,MediaSources,Chapters`
+      Fields: `${itemFields},People,MediaSources,Chapters,Trickplay`
     });
   }
 
@@ -678,6 +678,20 @@ export class JellyfinClient {
       fillWidth: String(width),
       quality: '90',
       api_key: this.accessToken ?? ''
+    });
+  }
+
+  getTrickplayImageUrl(
+    itemId: string,
+    mediaSourceId: string | undefined,
+    width: number,
+    index: number
+  ) {
+    return this.url(`/Videos/${itemId}/Trickplay/${width}/${index}.jpg`, {
+      ...(mediaSourceId && mediaSourceId.toLowerCase() !== itemId.toLowerCase()
+        ? { mediaSourceId }
+        : {}),
+      ApiKey: this.accessToken ?? ''
     });
   }
 
