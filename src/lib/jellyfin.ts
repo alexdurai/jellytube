@@ -8,6 +8,7 @@ import type {
   JellyfinPerson,
   JellyfinUser,
   LibraryResponse,
+  MediaServerType,
   PlaybackActivity,
   PlaybackInfo,
   PublicServerInfo
@@ -40,9 +41,16 @@ export function normalizeServerUrl(input: string) {
   return withProtocol.replace(/\/+$/, '');
 }
 
+export function detectMediaServerType(info: PublicServerInfo): MediaServerType {
+  const productName = info.ProductName?.toLowerCase() ?? '';
+  if (productName.includes('emby')) return 'emby';
+  if (productName.includes('jellyfin')) return 'jellyfin';
+  return 'jellyfin';
+}
+
 export function assertUserCanPlayMedia(user: JellyfinUser) {
   if (user.Policy?.EnableMediaPlayback === false) {
-    throw new JellyfinError('This Jellyfin account is not allowed to play media.');
+    throw new JellyfinError('This account is not allowed to play media.');
   }
 }
 
@@ -238,23 +246,32 @@ export class JellyfinClient {
   serverUrl: string;
   accessToken?: string;
   userId?: string;
+  serverType: MediaServerType;
   deviceId = getDeviceId();
 
-  /** Auth header value for Jellyfin 12+: HLS endpoints require the token in the
-   *  Authorization header (the legacy ?api_key= query param is 401 on 12.x). */
+  /** HLS.js uses this token header when the server does not accept query tokens. */
   get authHeader() {
-    return this.accessToken ? `MediaBrowser Token="${this.accessToken}"` : '';
+    if (!this.accessToken) return '';
+    return this.serverType === 'emby'
+      ? `${this.clientAuthorization}, Token="${this.accessToken}"`
+      : `MediaBrowser Token="${this.accessToken}"`;
   }
 
 
-  constructor(serverUrl: string, accessToken?: string, userId?: string) {
+  constructor(
+    serverUrl: string,
+    accessToken?: string,
+    userId?: string,
+    serverType: MediaServerType = 'jellyfin'
+  ) {
     this.serverUrl = normalizeServerUrl(serverUrl);
     this.accessToken = accessToken;
     this.userId = userId;
+    this.serverType = serverType;
   }
 
   withAuth(accessToken: string, userId: string) {
-    return new JellyfinClient(this.serverUrl, accessToken, userId);
+    return new JellyfinClient(this.serverUrl, accessToken, userId, this.serverType);
   }
 
   async getPublicInfo() {
@@ -278,7 +295,7 @@ export class JellyfinClient {
   }
 
   async getItems(query: ItemQuery) {
-    if (!this.userId) throw new JellyfinError('Missing Jellyfin user id');
+    if (!this.userId) throw new JellyfinError('Missing media server user id');
     return this.get<ItemResponse>(`/Users/${this.userId}/Items`, {
       ParentId: query.parentId,
       Recursive: 'true',
@@ -372,7 +389,13 @@ export class JellyfinClient {
   async getItem(itemId: string) {
     if (!this.userId) throw new JellyfinError('Missing Jellyfin user id');
     return this.get<JellyfinItem>(`/Users/${this.userId}/Items/${itemId}`, {
-      Fields: `${itemFields},People,MediaSources,Chapters`
+      Fields: [
+        itemFields,
+        'People',
+        'MediaSources',
+        'Chapters',
+        ...(this.serverType === 'jellyfin' ? ['Trickplay'] : [])
+      ].join(',')
     });
   }
 
@@ -420,6 +443,57 @@ export class JellyfinClient {
       userId: this.userId,
       Fields: itemFields
     });
+  }
+
+  async getMovieCollections(itemId: string, libraryId: string, libraryName: string) {
+    if (!this.userId) throw new JellyfinError('Missing Jellyfin user id');
+    const collections = await this.get<ItemResponse>(`/Users/${this.userId}/Items`, {
+      ParentId: libraryId,
+      Recursive: 'true',
+      IncludeItemTypes: 'BoxSet',
+      Fields: 'ChildCount,ImageTags',
+      Limit: '500',
+      EnableTotalRecordCount: 'false'
+    });
+    const candidates = (collections.Items ?? []).filter(
+      (collection) => collection.ChildCount === undefined || collection.ChildCount > 1
+    );
+    const groups: Array<{ collection: JellyfinItem; items: JellyfinItem[] }> = [];
+    const batchSize = 6;
+
+    for (let offset = 0; offset < candidates.length; offset += batchSize) {
+      const batch = candidates.slice(offset, offset + batchSize);
+      const results = await Promise.all(
+        batch.map(async (collection) => {
+          const response = await this.get<ItemResponse>(`/Users/${this.userId}/Items`, {
+            ParentId: collection.Id,
+            Recursive: 'true',
+            IncludeItemTypes: 'Movie',
+            Fields: itemFields,
+            SortBy: 'SortName',
+            SortOrder: 'Ascending',
+            Limit: '100',
+            EnableTotalRecordCount: 'false'
+          });
+          return { collection, items: response.Items ?? [] };
+        })
+      );
+
+      for (const result of results) {
+        if (!result.items.some((movie) => movie.Id === itemId)) continue;
+        groups.push({
+          collection: result.collection,
+          items: result.items.map((movie) => ({
+            ...movie,
+            sourceLibraryId: libraryId,
+            sourceLibraryName: libraryName,
+            contentKind: 'movie' as const
+          }))
+        });
+      }
+    }
+
+    return groups;
   }
 
   async getMusicArtists(sourceId: string, limit = 80, startIndex = 0) {
@@ -677,8 +751,26 @@ export class JellyfinClient {
     return this.url('/Items/' + item.Id + '/Images/Primary', {
       fillWidth: String(width),
       quality: '90',
-      api_key: this.accessToken ?? ''
+      ...this.authQueryParams()
     });
+  }
+
+  getTrickplayImageUrl(
+    itemId: string,
+    mediaSourceId: string | undefined,
+    width: number,
+    index: number
+  ) {
+    return this.url(`/Videos/${itemId}/Trickplay/${width}/${index}.jpg`, {
+      ...(mediaSourceId && mediaSourceId.toLowerCase() !== itemId.toLowerCase()
+        ? { mediaSourceId }
+        : {}),
+      ...this.authQueryParams()
+    });
+  }
+
+  getEmbyTrickplayUrl(itemId: string) {
+    return this.url(`/Videos/${itemId}/index.bif`, this.authQueryParams());
   }
 
   getPersonImageUrl(person: JellyfinPerson, width = 640) {
@@ -686,7 +778,7 @@ export class JellyfinClient {
     return this.url('/Items/' + person.Id + '/Images/Primary', {
       fillWidth: String(width),
       quality: '90',
-      api_key: this.accessToken ?? ''
+      ...this.authQueryParams()
     });
   }
 
@@ -695,7 +787,7 @@ export class JellyfinClient {
     return this.url('/Items/' + item.Id + '/Images/Backdrop/0', {
       fillWidth: String(width),
       quality: '88',
-      api_key: this.accessToken ?? ''
+      ...this.authQueryParams()
     });
   }
 
@@ -704,7 +796,7 @@ export class JellyfinClient {
     return this.url(`/Videos/${itemId}/stream.${extension}`, {
       static: 'true',
       mediaSourceId,
-      api_key: this.accessToken ?? ''
+      ...this.authQueryParams()
     });
   }
 
@@ -714,7 +806,7 @@ export class JellyfinClient {
     return this.url(`/Audio/${itemId}/stream.${extension}`, {
       static: 'true',
       mediaSourceId,
-      api_key: this.accessToken ?? ''
+      ...this.authQueryParams()
     });
   }
 
@@ -724,14 +816,16 @@ export class JellyfinClient {
       const normalized = key.toLowerCase().replace(/_/g, '');
       return normalized === 'apikey';
     });
-    if (!hasApiKey && this.accessToken) url.searchParams.set('api_key', this.accessToken);
+    if (!hasApiKey && this.accessToken) {
+      url.searchParams.set(this.serverType === 'emby' ? 'api_key' : 'ApiKey', this.accessToken);
+    }
     return url.toString();
   }
 
   getSubtitleStreamUrl(itemId: string, mediaSourceId: string, streamIndex: number, format = 'vtt') {
     const extension = format.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'vtt';
     return this.url(`/Videos/${itemId}/${mediaSourceId}/Subtitles/${streamIndex}/0/Stream.${extension}`, {
-      api_key: this.accessToken ?? ''
+      ...this.authQueryParams()
     });
   }
 
@@ -752,7 +846,7 @@ export class JellyfinClient {
         options.subtitleStreamIndex !== undefined && options.subtitleStreamIndex >= 0
           ? 'Encode'
           : '',
-      api_key: this.accessToken ?? '',
+      ...this.authQueryParams(),
       VideoCodec: 'h264',
       AudioCodec: 'aac',
       VideoBitrate: String(options.videoBitrate ?? 12_000_000),
@@ -773,6 +867,11 @@ export class JellyfinClient {
     signal?: AbortSignal
   ) {
     return this.request<T>('GET', path, undefined, params, authenticated, signal);
+  }
+
+  private authQueryParams(): Record<string, string> {
+    if (!this.accessToken) return {};
+    return { [this.serverType === 'emby' ? 'api_key' : 'ApiKey']: this.accessToken };
   }
 
   private async post<T>(
@@ -815,7 +914,7 @@ export class JellyfinClient {
   }
 
   private headers(authenticated: boolean) {
-    const auth = `MediaBrowser Client="${CLIENT_NAME}", Device="Browser", DeviceId="${this.deviceId}", Version="${CLIENT_VERSION}"`;
+    const auth = this.clientAuthorization;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       // Jellyfin 12.1 no longer parses the legacy X-Emby-Authorization header;
@@ -827,9 +926,19 @@ export class JellyfinClient {
     if (authenticated && this.accessToken) {
       // Jellyfin 12.1 dropped the legacy X-Emby-Token header; it only accepts
       // the token in the Authorization header (MediaBrowser Token="...").
-      headers['Authorization'] = `MediaBrowser Token="${this.accessToken}"`;
+      if (this.serverType === 'emby') {
+        const embyAuth = `${auth}, Token="${this.accessToken}"`;
+        headers['Authorization'] = embyAuth;
+        headers['X-Emby-Authorization'] = embyAuth;
+      } else {
+        headers['Authorization'] = `MediaBrowser Token="${this.accessToken}"`;
+      }
     }
     return headers;
+  }
+
+  private get clientAuthorization() {
+    return `MediaBrowser Client="${CLIENT_NAME}", Device="Browser", DeviceId="${this.deviceId}", Version="${CLIENT_VERSION}"`;
   }
 
   private url(path: string, params?: Record<string, string>) {

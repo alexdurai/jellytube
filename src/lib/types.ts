@@ -19,10 +19,13 @@ export type PublicServerInfo = {
   LocalAddress?: string;
   ServerName?: string;
   Version?: string;
-  ProductName?: string;
+  ProductName?: string | null;
+  WanAddress?: string | null;
   Id?: string;
   StartupWizardCompleted?: boolean;
 };
+
+export type MediaServerType = 'jellyfin' | 'emby';
 
 export type JellyfinLibrary = {
   Id: string;
@@ -52,6 +55,18 @@ export type JellyfinUserData = {
   PlayedPercentage?: number;
   ItemId?: string;
 };
+
+export type JellyfinTrickplayInfo = {
+  Width: number;
+  Height: number;
+  TileWidth: number;
+  TileHeight: number;
+  ThumbnailCount: number;
+  Interval: number;
+  Bandwidth: number;
+};
+
+export type JellyfinTrickplayManifest = Record<string, Record<string, JellyfinTrickplayInfo>>;
 
 export type JellyfinMediaStream = {
   Type?: 'Video' | 'Audio' | 'Subtitle';
@@ -181,6 +196,7 @@ export type JellyfinItem = {
   MediaSources?: JellyfinMediaSource[];
   People?: JellyfinPerson[];
   Chapters?: JellyfinChapter[];
+  Trickplay?: JellyfinTrickplayManifest;
   sourceLibraryId?: string;
   sourceLibraryName?: string;
   sourceCollectionType?: string;
@@ -216,6 +232,7 @@ export type PlaybackActivity = {
 
 export type AppSession = {
   serverUrl: string;
+  serverType?: MediaServerType;
   serverName: string;
   serverVersion?: string;
   accessToken: string;

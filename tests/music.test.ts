@@ -135,7 +135,7 @@ test('getAudioStreamUrl builds a direct /Audio stream URL', () => {
     assert.ok(url.startsWith('http://media.local/Audio/item-1/stream.flac?'), url);
     assert.match(url, /static=true/);
     assert.match(url, /mediaSourceId=src-2/);
-    assert.match(url, /api_key=tok123/);
+    assert.match(url, /ApiKey=tok123/);
   } finally {
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
@@ -190,7 +190,7 @@ test('musicStreamFor falls back to a transcoded stream even when direct play is 
     // ... but a failed direct play recovers via a transcoded stream.
     const recovered = musicStreamFor(client, 'song-1', info, { forceTranscode: true });
     assert.equal(recovered!.playMethod, 'Transcode');
-    assert.equal(recovered!.src, 'http://media.local/Audio/song-1/stream.aac?api_key=tok');
+    assert.equal(recovered!.src, 'http://media.local/Audio/song-1/stream.aac?ApiKey=tok');
   } finally {
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
@@ -214,7 +214,7 @@ test('musicStreamFor falls back to Jellyfin transcoding URL without direct play'
     });
     assert.ok(stream);
     assert.equal(stream!.playMethod, 'Transcode');
-    assert.equal(stream!.src, 'http://media.local/Audio/song-2/stream.aac?api_key=tok');
+    assert.equal(stream!.src, 'http://media.local/Audio/song-2/stream.aac?ApiKey=tok');
   } finally {
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
