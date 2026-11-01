@@ -2339,7 +2339,7 @@ label {
   transform: translateY(-1px);
 }
 
-.skip-intro-button {
+.skip-segment-button {
   position: absolute;
   right: 18px;
   bottom: 96px;
@@ -2363,14 +2363,18 @@ label {
     transform 0.15s ease;
 }
 
-.skip-intro-button:hover {
+.skip-segment-button:hover {
   background: rgba(24, 24, 34, 0.92);
   transform: scale(1.04);
 }
 
-.skip-intro-button:focus-visible {
+.skip-segment-button:focus-visible {
   outline: 2px solid rgba(255, 255, 255, 0.75);
   outline-offset: 2px;
+}
+
+.skip-outro-button {
+  bottom: 148px;
 }
 
 .player-controls-layer {

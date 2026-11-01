@@ -438,6 +438,12 @@
   async function initializeApp() {
     const initialRoute = readUrlRoute();
     route = routeForUrlRoute(initialRoute);
+    if (initialRoute.view === 'watch') {
+      await navigateTo(initialRoute, { history: 'replace', scroll: false });
+      void loadAll(routeForUrlRoute(initialRoute), loadingLabelForUrlRoute(initialRoute), true);
+      return;
+    }
+
     // Any navigateTo() (sidebar click, popstate, opening playback) while the
     // initial catalog load runs bumps navigationGeneration. When that happens
     // the user's navigation already applied its route and wrote its URL, so the
@@ -449,13 +455,16 @@
     await navigateTo(initialRoute, { history: 'replace', scroll: false });
   }
 
-  async function loadAll(skeletonRoute: Route = loadingRoute, label = loadingLabelForRoute(skeletonRoute)) {
+  async function loadAll(
+    skeletonRoute: Route = loadingRoute,
+    label = loadingLabelForRoute(skeletonRoute),
+    background = false
+  ) {
     loadingRoute = skeletonRoute;
     loadingLabel = label;
     const progressivelyRenderHome = route === 'home' && skeletonRoute === 'home';
-    loading = !progressivelyRenderHome;
+    loading = background ? false : !progressivelyRenderHome;
     catalogReady = false;
-    error = '';
     const loadGeneration = ++catalogLoadGeneration;
     const similarityGeneration = ++catalogSimilarityGeneration;
     resetHomeSectionStates();
@@ -464,6 +473,7 @@
     musicRelatedItemScores = new Map();
     watchRelatedItemScores.clear();
     watchRelatedItemRequests.clear();
+    if (!background) error = '';
 
     try {
       let videoByRelease: JellyfinItem[] = [];
@@ -682,12 +692,19 @@
     } catch (caught) {
       if (loadGeneration !== catalogLoadGeneration) return;
       failPendingHomeSections();
-      if (!progressivelyRenderHome) {
+      if (!progressivelyRenderHome && (!background || routeUsesCatalogData(route))) {
         error = caught instanceof Error ? caught.message : 'Could not load media server libraries.';
+      } else if (background) {
+        console.warn(
+          'Could not load media server libraries:',
+          caught instanceof Error ? caught.message : caught
+        );
       }
     } finally {
       if (loadGeneration === catalogLoadGeneration) {
-        loading = false;
+        if (!background || (loading && loadingRoute === route && routeUsesCatalogData(route))) {
+          loading = false;
+        }
         catalogReady = true;
       }
     }
@@ -1110,17 +1127,18 @@
       return { view: 'actor', personId };
     }
 
-    const item = await resolveRoutedItem(nextRoute.itemId);
+    const item = await resolveRoutedItem(nextRoute.itemId, options.generation);
+    if (options.generation !== navigationGeneration) return nextRoute;
     if (!item) {
       showHome();
       scrollToTop(options.scroll);
       return { view: 'home' };
     }
 
-    await ensureSeriesEpisodes(item);
     const mixChannel = nextRoute.list === 'mix' ? nextRoute.channel?.trim() ?? '' : '';
     const queue = mixChannel ? mixQueueFor(mixChannel, item) : [];
     setWatchItem(item, queue, mixChannel ? `${mixChannel} Mix` : '', true, options.autoplay);
+    void ensureSeriesEpisodes(item);
     scrollToTop(options.scroll);
     return {
       view: 'watch',
@@ -1744,7 +1762,7 @@
     );
   }
 
-  async function resolveRoutedItem(itemId: string) {
+  async function resolveRoutedItem(itemId: string, generation: number) {
     const existing = findLoadedItem(itemId);
     if (existing) return existing;
 
@@ -1754,12 +1772,15 @@
     error = '';
     try {
       const item = await client.getItem(itemId);
+      if (generation !== navigationGeneration) return null;
       return addResolvedItem(item);
     } catch (caught) {
-      error = caught instanceof Error ? caught.message : 'Could not load that video.';
+      if (generation === navigationGeneration) {
+        error = caught instanceof Error ? caught.message : 'Could not load that video.';
+      }
       return null;
     } finally {
-      loading = false;
+      if (generation === navigationGeneration) loading = false;
     }
   }
 
@@ -2184,7 +2205,7 @@
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
   function retryLoadingRoute() {
-    if (loadingRoute === 'actor') {
+    if (loadingRoute === 'actor' || loadingRoute === 'watch') {
       void navigateTo(readUrlRoute(), { history: 'none', scroll: false });
       return;
     }
@@ -2279,6 +2300,15 @@
     if (nextRoute.view === 'actor') return 'Loading actor';
     if (nextRoute.view === 'watch') return 'Loading video';
     return loadingLabelForRoute(routeForUrlRoute(nextRoute));
+  }
+
+  function routeUsesCatalogData(nextRoute: Route) {
+    return (
+      nextRoute === 'movies' ||
+      nextRoute === 'musicvideos' ||
+      nextRoute === 'shows' ||
+      nextRoute === 'subscriptions'
+    );
   }
 
   function loadingLabelForRoute(nextRoute: Route) {

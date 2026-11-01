@@ -97,7 +97,11 @@ import {
   introWindowForItem,
   introWindowForPlayback,
   introWindowFromSegments,
-  shouldShowSkipIntro
+  outroWindowForItem,
+  outroWindowForPlayback,
+  outroWindowFromSegments,
+  shouldShowSkipIntro,
+  shouldShowSkipOutro
 } from '../src/lib/intros';
 import { trickplayResolutionForSource, trickplayTileAt } from '../src/lib/trickplay';
 import { embyTrickplayFrameAt, parseEmbyBif } from '../src/lib/embyTrickplay';
@@ -2802,7 +2806,7 @@ test('Jellyfin trickplay resolution and sprite index follow the selected media s
   assert.equal(trickplayTileAt(manifest['source-1']['320'], 2500), undefined);
 });
 
-test('Jellyfin playback requests carry selected audio indexes through negotiation and HLS', async () => {
+test('Jellyfin playback requests carry selected audio indexes and keep direct play available', async () => {
   const originalFetch = globalThis.fetch;
   const originalLocalStorage = globalThis.localStorage;
   const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -2850,8 +2854,11 @@ test('Jellyfin playback requests carry selected audio indexes through negotiatio
     };
     assert.deepEqual(deviceProfile.TranscodingProfiles.slice(0, 2).map((profile) => profile.Container), ['mp4', 'ts']);
     assert.equal(deviceProfile.TranscodingProfiles[0].VideoCodec, 'hevc');
-    assert.equal(requests[0].body.EnableDirectPlay, false);
-    assert.equal(requests[0].body.AllowVideoStreamCopy, true);
+    assert.equal('EnableDirectPlay' in requests[0].body, false);
+    assert.equal('EnableDirectStream' in requests[0].body, false);
+    assert.equal('EnableTranscoding' in requests[0].body, false);
+    assert.equal('AllowVideoStreamCopy' in requests[0].body, false);
+    assert.equal('AllowAudioStreamCopy' in requests[0].body, false);
     assert.equal('EnableDirectPlay' in requests[1].body, false);
 
     const selectedUrl = new URL(client.getHlsUrl('video-1', 'source-1', {
@@ -2940,6 +2947,22 @@ test('introWindowForItem honors an explicit chapter end when present', () => {
   assert.deepEqual(introWindowForItem(item), { start: 250, end: 760 });
 });
 
+test('introWindowForItem pairs Emby Intro Start and Intro End chapters', () => {
+  const item = {
+    Id: 'ep-1',
+    Name: 'S01E01',
+    Type: 'Episode',
+    RunTimeTicks: 2_200_000_000,
+    Chapters: [
+      { StartPositionTicks: 10_000_000, Name: 'Chapter 1' },
+      { StartPositionTicks: 250_000_000, Name: 'Intro Start' },
+      { StartPositionTicks: 760_000_000, Name: 'Intro End' },
+      { StartPositionTicks: 900_000_000, Name: 'Chapter 2' }
+    ]
+  };
+  assert.deepEqual(introWindowForItem(item), { start: 25, end: 76 });
+});
+
 test('introWindowForItem rejects invalid or empty windows', () => {
   assert.equal(
     introWindowForItem({ Id: 'a', Name: 'A', Type: 'Episode', Chapters: [{ StartPositionTicks: 500, Name: 'Intro' }] }),
@@ -2996,6 +3019,30 @@ test('introWindowFromSegments returns null without a valid Intro segment', () =>
     introWindowFromSegments({ Items: [{ Type: 'Intro', StartTicks: 100, EndTicks: 200 }] } as unknown as JellyfinMediaSegment[]),
     null
   );
+});
+
+test('outro windows use Outro segments or Outro/Credits chapters', () => {
+  const segments = [
+    { Type: 'Outro', StartTicks: 1_245_000_000, EndTicks: 1_302_000_000 }
+  ];
+  const item = {
+    Id: 'ep-1',
+    Name: 'S01E01',
+    Type: 'Episode',
+    RunTimeTicks: 1_500_000_000,
+    Chapters: [
+      { StartPositionTicks: 1_200_000_000, Name: 'Main Feature' },
+      { StartPositionTicks: 1_300_000_000, Name: 'Credits' }
+    ]
+  };
+
+  assert.deepEqual(outroWindowFromSegments(segments), { start: 124.5, end: 130.2 });
+  assert.deepEqual(outroWindowForItem(item), { start: 130, end: 150 });
+  assert.deepEqual(outroWindowForPlayback(segments, item), { start: 124.5, end: 130.2 });
+  assert.equal(shouldShowSkipOutro(123, { start: 124.5, end: 130.2 }, false), false);
+  assert.equal(shouldShowSkipOutro(125, { start: 124.5, end: 130.2 }, false), true);
+  assert.equal(shouldShowSkipOutro(131, { start: 124.5, end: 130.2 }, false), false);
+  assert.equal(shouldShowSkipOutro(125, { start: 124.5, end: 130.2 }, true), false);
 });
 
 test('introWindowForPlayback prefers media segments over embedded chapters', () => {
