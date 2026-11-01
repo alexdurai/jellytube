@@ -47,7 +47,12 @@
     shouldAdvancePlayingNext,
     shouldShowPlayingNext
   } from '../lib/playingNext';
-  import { introWindowForPlayback, shouldShowSkipIntro } from '../lib/intros';
+  import {
+    introWindowForPlayback,
+    outroWindowForPlayback,
+    shouldShowSkipIntro,
+    shouldShowSkipOutro
+  } from '../lib/intros';
   import { chapterIndexAt, useWatchChapters, type WatchChapter } from '../lib/chapters';
   import {
     CINEMATIC_FAILURE_LIMIT,
@@ -317,6 +322,7 @@
   let activeEmbyTrickplayFrame: EmbyTrickplayFrame | undefined;
   let embyTrickplayObjectUrl = '';
   let introDismissed = false;
+  let outroDismissed = false;
   let introSegments: JellyfinMediaSegment[] | null = null;
   let duration = 0;
   let bufferedPercent = 0;
@@ -333,6 +339,8 @@
   $: progressPercent = durationSeconds > 0 ? Math.min(100, (currentTime / durationSeconds) * 100) : 0;
   $: intro = introWindowForPlayback(introSegments, detailedItem);
   $: showSkipIntro = shouldShowSkipIntro(currentTime, intro, introDismissed);
+  $: outro = outroWindowForPlayback(introSegments, detailedItem);
+  $: showSkipOutro = shouldShowSkipOutro(currentTime, outro, outroDismissed);
   $: seekMax = durationSeconds || 0;
   $: chapters = useWatchChapters(detailedItem, durationSeconds);
   $: activeChapterIndex = chapterIndexAt(chapters, currentTime);
@@ -680,6 +688,7 @@
     activeTextTrackUrl = '';
     currentTime = 0;
     introDismissed = false;
+    outroDismissed = false;
     introSegments = null;
     bufferedPercent = 0;
     duration = 0;
@@ -1932,6 +1941,14 @@
     syncBuffered();
   }
 
+  function skipOutro() {
+    if (!video || !outro) return;
+    outroDismissed = true;
+    video.currentTime = outro.end;
+    currentTime = outro.end;
+    syncBuffered();
+  }
+
   function seekBy(seconds: number) {
     if (!video || !durationSeconds) return;
     video.currentTime = Math.min(durationSeconds, Math.max(0, video.currentTime + seconds));
@@ -2031,6 +2048,15 @@
     video.volume = Math.min(1, Math.max(0, nextVolume));
     video.muted = video.volume === 0;
     handleVolumeChange();
+  }
+
+  function adjustVolume(direction: number) {
+    if (!video) return;
+    const nextVolume = Math.min(1, Math.max(0, video.volume + direction * 0.05));
+    video.volume = nextVolume;
+    video.muted = nextVolume === 0;
+    handleVolumeChange();
+    showControls();
   }
 
   function handleWheel(event: WheelEvent) {
@@ -2144,10 +2170,34 @@
       return;
     }
 
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.type === 'range') {
+      if (target.classList.contains('player-seek') && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        event.preventDefault();
+        seekBy(event.key === 'ArrowLeft' ? -SEEK_STEP_SECONDS : SEEK_STEP_SECONDS);
+        return;
+      }
+      if (
+        target.classList.contains('volume-slider') &&
+        (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+      ) {
+        event.preventDefault();
+        adjustVolume(event.key === 'ArrowUp' ? 1 : -1);
+        return;
+      }
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        adjustVolume(event.key === 'ArrowUp' ? 1 : -1);
+        return;
+      }
+    }
+
     if (
-      event.target instanceof HTMLInputElement ||
-      event.target instanceof HTMLButtonElement ||
-      event.target instanceof HTMLSelectElement
+      (target instanceof HTMLInputElement && target.type !== 'range') ||
+      target instanceof HTMLSelectElement ||
+      target instanceof HTMLTextAreaElement ||
+      (target instanceof HTMLElement && target.isContentEditable) ||
+      (target instanceof HTMLButtonElement && (event.key === ' ' || event.key === 'Enter'))
     ) {
       return;
     }
@@ -2161,6 +2211,9 @@
     } else if (event.key === 'ArrowRight') {
       event.preventDefault();
       seekBy(SEEK_STEP_SECONDS);
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      adjustVolume(event.key === 'ArrowUp' ? 1 : -1);
     } else if (event.key.toLowerCase() === 'm') {
       event.preventDefault();
       toggleMute();
@@ -2646,9 +2699,15 @@
           {/if}
 
           {#if showSkipIntro}
-            <button class="skip-intro-button" aria-label="Skip intro" on:click|stopPropagation={skipIntro}>
+            <button class="skip-segment-button" aria-label="Skip intro" on:click|stopPropagation={skipIntro}>
               <SkipForward size={18} />
               <span>Skip Intro</span>
+            </button>
+          {/if}
+          {#if showSkipOutro}
+            <button class="skip-segment-button skip-outro-button" aria-label="Skip outro" on:click|stopPropagation={skipOutro}>
+              <SkipForward size={18} />
+              <span>Skip Outro</span>
             </button>
           {/if}
 
