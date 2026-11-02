@@ -196,7 +196,7 @@ const musicTrackFields = [
 ].join(',');
 
 export type ItemQuery = {
-  parentId: string;
+  parentId?: string;
   itemTypes?: string;
   limit?: number;
   startIndex?: number;
@@ -297,7 +297,7 @@ export class JellyfinClient {
   async getItems(query: ItemQuery) {
     if (!this.userId) throw new JellyfinError('Missing media server user id');
     return this.get<ItemResponse>(`/Users/${this.userId}/Items`, {
-      ParentId: query.parentId,
+      ...(query.parentId ? { ParentId: query.parentId } : {}),
       Recursive: 'true',
       IncludeItemTypes: query.itemTypes ?? 'Video,Episode',
       Fields: query.fields ?? itemFields,
@@ -311,6 +311,30 @@ export class JellyfinClient {
       ...(query.artistIds ? { ArtistIds: query.artistIds } : {}),
       ...(query.enableTotalRecordCount === false ? { EnableTotalRecordCount: 'false' } : {})
     });
+  }
+
+  async getPlaybackHistory(limit = 200) {
+    if (!this.userId) throw new JellyfinError('Missing media server user id');
+    const pageSize = 100;
+    const history: JellyfinItem[] = [];
+
+    while (history.length < limit) {
+      const pageLimit = Math.min(pageSize, limit - history.length);
+      const response = await this.getItems({
+        itemTypes: 'Movie,Episode,Video,MusicVideo',
+        sortBy: 'DatePlayed',
+        sortOrder: 'Descending',
+        filters: 'IsPlayed',
+        limit: pageLimit,
+        startIndex: history.length
+      });
+      const items = response.Items ?? [];
+      history.push(...items);
+      const total = response.TotalRecordCount;
+      if (items.length < pageLimit || (total !== undefined && history.length >= total)) break;
+    }
+
+    return history;
   }
 
   async getItemsWithMediaStreams(itemIds: string[]) {
@@ -641,7 +665,8 @@ export class JellyfinClient {
     itemId: string,
     positionTicks = 0,
     audioStreamIndex?: number,
-    remuxCapabilities?: HlsRemuxCapabilities | null
+    remuxCapabilities?: HlsRemuxCapabilities | null,
+    preferDirectPlay = true
   ) {
     if (!this.userId) throw new JellyfinError('Missing Jellyfin user id');
     return this.post<PlaybackInfo>(
@@ -649,7 +674,7 @@ export class JellyfinClient {
       {
         DeviceProfile: browserDeviceProfile(140_000_000, detectDirectPlayCodecs(), remuxCapabilities),
         MaxStreamingBitrate: 140_000_000,
-        ...(remuxCapabilities?.preferHlsForStartup
+        ...(remuxCapabilities?.preferHlsForStartup && !preferDirectPlay
           ? {
               EnableDirectPlay: false,
               EnableDirectStream: true,
@@ -753,6 +778,20 @@ export class JellyfinClient {
       quality: '90',
       ...this.authQueryParams()
     });
+  }
+
+  getUserImageUrl(userId: string, width = 96) {
+    if (!userId) return '';
+    return this.url(`/Users/${userId}/Images/Primary`, {
+      maxWidth: String(width),
+      quality: '90',
+      ...this.authQueryParams()
+    });
+  }
+
+  getDownloadUrl(itemId: string) {
+    if (!itemId) return '';
+    return this.url(`/Items/${itemId}/Download`, this.authQueryParams());
   }
 
   getTrickplayImageUrl(

@@ -1,6 +1,8 @@
 export type PlayerAspectMode =
   | 'fit'
+  | 'stretch-monitor'
   | 'stretch-4-3'
+  | 'stretch-16-10'
   | 'stretch-16-9'
   | 'stretch-21-9'
   | 'crop-21-9';
@@ -24,9 +26,21 @@ export const PLAYER_ASPECT_OPTIONS: PlayerAspectOption[] = [
     behavior: 'fit'
   },
   {
+    id: 'stretch-monitor',
+    label: 'Stretch (fill)',
+    detail: 'Stretch to the display aspect ratio',
+    behavior: 'stretch'
+  },
+  {
     id: 'stretch-4-3',
     label: 'Stretch to 4:3',
     detail: 'Fill a standard frame without cropping',
+    behavior: 'stretch'
+  },
+  {
+    id: 'stretch-16-10',
+    label: 'Stretch to 16:10',
+    detail: 'Fill a widescreen frame without cropping',
     behavior: 'stretch'
   },
   {
@@ -79,4 +93,12 @@ export function playerSourceAspectRatio(
     return safeFallback;
   }
   return width / height;
+}
+
+export function playerMonitorAspectRatio(
+  width: number | null | undefined,
+  height: number | null | undefined,
+  fallback = DEFAULT_PLAYER_SOURCE_ASPECT_RATIO
+) {
+  return playerSourceAspectRatio(width, height, fallback);
 }

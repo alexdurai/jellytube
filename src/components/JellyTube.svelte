@@ -2,6 +2,8 @@
   import { createEventDispatcher, onMount } from 'svelte';
   import {
     Clapperboard,
+    ChevronDown,
+    History,
     Home,
     Library,
     ListVideo,
@@ -14,6 +16,7 @@
     Podcast,
     RotateCcw,
     Search,
+    Settings,
     Star,
     Sun
   } from 'lucide-svelte';
@@ -56,6 +59,7 @@
     popularItems,
     personalPlaybackActivity,
     playbackProgress,
+    playbackTitle,
     rankRecommendations,
     watchRecommendationCandidates,
     type RankedItem
@@ -90,13 +94,19 @@
   import ShowRecommendationCard from './ShowRecommendationCard.svelte';
   import VideoCard from './VideoCard.svelte';
   import WatchPage from './WatchPage.svelte';
+  import PlaybackOptionsModal from './PlaybackOptionsModal.svelte';
   import MusicPage from './music/MusicPage.svelte';
   import MusicPlayer from './music/MusicPlayer.svelte';
   import { musicPlayerState, playTracks } from '../lib/music/store';
+  import {
+    loadPlayerPreferences,
+    savePlayerPreferences,
+    type PlayerPreferences
+  } from '../lib/playerPreferences';
 
   export let session: AppSession;
 
-  type Route = 'home' | 'watch' | 'search' | 'movies' | 'music' | 'musicvideos' | 'shows' | 'subscriptions' | 'channel' | 'actor' | 'libraries';
+  type Route = 'home' | 'watch' | 'search' | 'movies' | 'music' | 'musicvideos' | 'shows' | 'subscriptions' | 'history' | 'channel' | 'actor' | 'libraries';
   type ThemeMode = 'system' | 'light' | 'dark';
   type EffectiveTheme = 'light' | 'dark';
   type HomeSectionState = 'loading' | 'ready' | 'error';
@@ -108,6 +118,7 @@
     | { view: 'musicvideos' }
     | { view: 'shows' }
     | { view: 'subscriptions' }
+    | { view: 'history' }
     | { view: 'libraries' }
     | { view: 'search'; query: string }
     | { view: 'channel'; channel: string }
@@ -122,6 +133,7 @@
   const WATCH_RECOMMENDATION_LIMIT = 28;
   const RECOMMENDATION_DIAGNOSTICS_REPORT_KEY = 'jellytube.recommendationDiagnostics.latest';
   const FAVORITE_MUSIC_MIXES_KEY = `jellytube.favoriteMusicMixes.${session.serverUrl}.${session.userId}`;
+  const PREFER_DIRECT_PLAY_KEY = `jellytube.preferDirectPlay.${session.serverUrl}.${session.userId}`;
 
   const dispatch = createEventDispatcher<{ logout: void }>();
   const client = new JellyfinClient(
@@ -135,6 +147,11 @@
   let catalogReady = false;
   let error = '';
   let menuOpen = false;
+  let accountMenuOpen = false;
+  let userAvatarFailed = false;
+  let preferDirectPlay = localStorage.getItem(PREFER_DIRECT_PLAY_KEY) !== 'false';
+  let playerPreferences = loadPlayerPreferences();
+  let playerOptionsOpen = false;
   let route: Route = 'home';
   let musicItem: MusicItemSubview | null = null;
   let loadingRoute: Route = 'home';
@@ -198,6 +215,10 @@
   const seriesEpisodeRequests = new Map<string, Promise<JellyfinItem[]>>();
   let channelLoading = false;
   let activity: PlaybackActivity[] = [];
+  let historyItems: JellyfinItem[] = [];
+  let historyLoading = false;
+  let historyLoaded = false;
+  let historyError = '';
   let recentPlaybackIds: string[] = [];
   let watchRecommendations: ProjectedRecommendation[] = [];
   let watchRecommendationContextKey = '';
@@ -209,6 +230,7 @@
   const watchRelatedItemScores = new Map<string, ReadonlyMap<string, number>>();
   const watchRelatedItemRequests = new Map<string, Promise<ReadonlyMap<string, number>>>();
   let favoriteMixNames = loadFavoriteMixNames();
+  $: userAvatarUrl = client.getUserImageUrl(session.userId);
 
   function displayChannelSeasons(seasons: EpisodeSeason[]) {
     if (seasons.length < 10) return seasons;
@@ -218,6 +240,42 @@
     if (maxSeason <= outlierThreshold) return seasons;
     const filtered = seasons.filter((season) => season.season <= outlierThreshold);
     return filtered.length ? filtered : seasons;
+  }
+
+  async function loadWatchHistory() {
+    historyLoading = true;
+    historyError = '';
+    try {
+      historyItems = await client.getPlaybackHistory();
+      historyLoaded = true;
+    } catch (caught) {
+      historyError = caught instanceof Error ? caught.message : 'Could not load watch history.';
+    } finally {
+      historyLoading = false;
+    }
+  }
+
+  function persistPreferDirectPlay(event: Event) {
+    if (!(event.currentTarget instanceof HTMLInputElement)) return;
+    preferDirectPlay = event.currentTarget.checked;
+    localStorage.setItem(PREFER_DIRECT_PLAY_KEY, String(preferDirectPlay));
+  }
+
+  function updatePlayerPreferences(event: CustomEvent<PlayerPreferences>) {
+    playerPreferences = event.detail;
+    savePlayerPreferences(playerPreferences);
+  }
+
+  function openPlayerOptions() {
+    accountMenuOpen = false;
+    playerOptionsOpen = true;
+  }
+
+  function handleDocumentClick(event: MouseEvent) {
+    const target = event.target;
+    if (target instanceof Element && !target.closest('.account-menu-anchor')) {
+      accountMenuOpen = false;
+    }
   }
 
   $: videoSources = session.selectedLibraries.filter((source) => source.contentKind === 'video');
@@ -355,7 +413,7 @@
 
   $: {
     if (route === 'watch' && activePlaybackItem) {
-      document.title = `${displayTitle(activePlaybackItem)} - JellyTube`;
+      document.title = `${playbackTitle(activePlaybackItem)} - JellyTube`;
     } else if (route === 'channel' && selectedChannel) {
       document.title = `${selectedChannel} - JellyTube`;
     } else if (route === 'actor' && selectedActor) {
@@ -372,6 +430,8 @@
       document.title = 'Shows - JellyTube';
     } else if (route === 'subscriptions') {
       document.title = 'Subscriptions - JellyTube';
+    } else if (route === 'history') {
+      document.title = 'Watch history - JellyTube';
     } else if (route === 'home') {
       document.title = 'Home - JellyTube';
     } else {
@@ -384,6 +444,7 @@
     applyTvInputClass();
     const removeTvInputListener = onTvInputChange(applyTvInputClass);
     document.addEventListener('keydown', handleGridArrowKeydown);
+    document.addEventListener('click', handleDocumentClick);
     const colorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const handleSystemThemeChange = () => {
       if (themeMode === 'system') applyTheme();
@@ -394,6 +455,7 @@
     return () => {
       removeTvInputListener();
       document.removeEventListener('keydown', handleGridArrowKeydown);
+      document.removeEventListener('click', handleDocumentClick);
       colorSchemeQuery.removeEventListener('change', handleSystemThemeChange);
       window.removeEventListener('popstate', handlePopState);
     };
@@ -403,6 +465,10 @@
   const GRID_CONTAINER_SELECTOR = '.video-grid, .movie-grid, .episode-strip, .mix-grid, .actor-rail';
 
   function handleGridArrowKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && accountMenuOpen) {
+      accountMenuOpen = false;
+      return;
+    }
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
@@ -1070,6 +1136,13 @@
       return nextRoute;
     }
 
+    if (nextRoute.view === 'history') {
+      showSimpleRoute('history');
+      scrollToTop(options.scroll);
+      if (!historyLoaded) void loadWatchHistory();
+      return nextRoute;
+    }
+
     if (nextRoute.view === 'movies' || nextRoute.view === 'musicvideos' || nextRoute.view === 'shows' || nextRoute.view === 'subscriptions') {
       showSimpleRoute(nextRoute.view);
       scrollToTop(options.scroll);
@@ -1549,6 +1622,7 @@
       nextRoute === 'musicvideos' ||
       nextRoute === 'shows' ||
       nextRoute === 'subscriptions' ||
+      nextRoute === 'history' ||
       nextRoute === 'libraries'
     ) {
       void navigateTo({ view: nextRoute });
@@ -1559,7 +1633,7 @@
     }
   }
 
-  function showSimpleRoute(nextRoute: 'movies' | 'music' | 'musicvideos' | 'shows' | 'subscriptions') {
+  function showSimpleRoute(nextRoute: 'movies' | 'music' | 'musicvideos' | 'shows' | 'subscriptions' | 'history') {
     route = nextRoute;
     selectedChannelSeason = 0;
     selectedChannel = '';
@@ -2244,6 +2318,7 @@
     }
     if (section === 'shows') return { view: 'shows' };
     if (section === 'subscriptions') return { view: 'subscriptions' };
+    if (section === 'history') return { view: 'history' };
     if (section === 'libraries') return { view: 'libraries' };
     if (section === 'channel') return { view: 'channel', channel: parts.slice(1).join('/') || url.searchParams.get('name') || '' };
     return { view: 'home' };
@@ -2273,6 +2348,7 @@
     }
     if (nextRoute.view === 'shows') return '/shows';
     if (nextRoute.view === 'subscriptions') return '/subscriptions';
+    if (nextRoute.view === 'history') return '/history';
     if (nextRoute.view === 'libraries') return '/libraries';
     if (nextRoute.view === 'search') {
       const params = new URLSearchParams({ q: nextRoute.query });
@@ -2299,6 +2375,7 @@
     if (nextRoute.view === 'channel') return nextRoute.channel.trim() ? `Loading ${nextRoute.channel.trim()}` : 'Loading channel';
     if (nextRoute.view === 'actor') return 'Loading actor';
     if (nextRoute.view === 'watch') return 'Loading video';
+    if (nextRoute.view === 'history') return 'Loading watch history';
     return loadingLabelForRoute(routeForUrlRoute(nextRoute));
   }
 
@@ -2410,18 +2487,55 @@
           <Sun size={19} />
         {/if}
       </button>
-      <div
-        class="account-pill"
-        title={`${session.serverName} - ${session.userName} on ${session.serverType === 'emby' ? 'Emby' : 'Jellyfin'}`}
-      >
-        {#if session.serverType === 'emby'}
-          <span class="server-brand-mark emby" aria-label="Emby server">E</span>
-        {:else}
-          <span class="server-brand-mark jellyfin" aria-label="Jellyfin server">
-            <img src="/jellyfin-mark.svg" alt="" />
+      <div class="account-menu-anchor">
+        <button
+          class="account-pill"
+          aria-haspopup="menu"
+          aria-expanded={accountMenuOpen}
+          aria-label={`Account: ${session.userName}`}
+          title={`${session.serverName} - ${session.userName} on ${session.serverType === 'emby' ? 'Emby' : 'Jellyfin'}`}
+          on:click={() => (accountMenuOpen = !accountMenuOpen)}
+        >
+          <span class="account-avatar">
+            {#if userAvatarUrl && !userAvatarFailed}
+              <img src={userAvatarUrl} alt="" on:error={() => (userAvatarFailed = true)} />
+            {:else}
+              <span>{session.userName.slice(0, 1).toUpperCase()}</span>
+            {/if}
           </span>
+          <span class="account-user-name">{session.userName}</span>
+          <ChevronDown size={16} aria-hidden="true" />
+        </button>
+        {#if accountMenuOpen}
+          <div class="account-dropdown" role="menu" aria-label="Account options">
+            <div class="account-server-name">{session.serverName}</div>
+            <div class="account-server-type">
+              {session.serverType === 'emby' ? 'Emby server' : 'Jellyfin server'}
+            </div>
+            <div class="account-menu-divider"></div>
+            <label class="account-setting">
+              <input
+                type="checkbox"
+                bind:checked={preferDirectPlay}
+                on:change={persistPreferDirectPlay}
+              />
+              <span>
+                <strong>Prefer direct play</strong>
+                <small>Try the original video before transcoding</small>
+              </span>
+            </label>
+            <div class="account-menu-divider"></div>
+            <button class="account-signout" role="menuitem" on:click={openPlayerOptions}>
+              <Settings size={17} />
+              Options
+            </button>
+            <div class="account-menu-divider"></div>
+            <button class="account-signout" role="menuitem" on:click={() => dispatch('logout')}>
+              <LogOut size={17} />
+              Sign out
+            </button>
+          </div>
         {/if}
-        <span>{session.userName}</span>
       </div>
     </div>
   </header>
@@ -2465,6 +2579,10 @@
       <span class="nav-label-short">Subs</span>
       <span class="nav-label-full">Subscriptions</span>
     </button>
+    <button class:active={route === 'history'} on:click={() => goRoute('history')}>
+      <History size={21} />
+      <span>History</span>
+    </button>
     <button
       class:active={route === 'libraries'}
       class="library-summary"
@@ -2488,6 +2606,8 @@
           {client}
           item={activePlaybackItem}
           autoplay={activePlaybackAutoplay}
+          {preferDirectPlay}
+          playerPreferences={playerPreferences}
           minimized={route !== 'watch'}
           darkTheme={effectiveTheme === 'dark'}
           queue={watchQueue}
@@ -3063,6 +3183,36 @@
           </div>
         </section>
       {/if}
+    {:else if route === 'history'}
+      <section class="feed-section history-page">
+        <div class="section-heading">
+          <div>
+            <h2>Watch history</h2>
+            <span>Recently watched from your selected libraries</span>
+          </div>
+        </div>
+        {#if historyError}
+          <div class="status-error">
+            <span>{historyError}</span>
+            <button class="secondary-action" on:click={() => void loadWatchHistory()}>Try again</button>
+          </div>
+        {:else if historyLoading}
+          <div class="empty-state compact">Loading watch history…</div>
+        {:else if historyItems.length}
+          <div class="video-grid">
+            {#each historyItems as item (item.Id)}
+              <VideoCard
+                {client}
+                {item}
+                on:select={(event) => openItem(event.detail)}
+                on:channel={(event) => openChannel(event.detail)}
+              />
+            {/each}
+          </div>
+        {:else}
+          <div class="empty-state compact">Nothing watched yet.</div>
+        {/if}
+      </section>
     {:else if route === 'channel'}
       {#if channelEpisodeCollection}
         <section class="show-hero" style={channelHeroBackdropStyle}>
@@ -3439,6 +3589,14 @@
       {/if}
     {/if}
   </main>
+
+  {#if playerOptionsOpen}
+    <PlaybackOptionsModal
+      preferences={playerPreferences}
+      on:change={updatePlayerPreferences}
+      on:close={() => (playerOptionsOpen = false)}
+    />
+  {/if}
 
   {#if !activePlaybackItem}
     <MusicPlayer {client} on:openItem={(event) => navigateTo({ view: 'music', item: event.detail })} />

@@ -7,6 +7,8 @@
     Check,
     ChevronLeft,
     ChevronRight,
+    Download,
+    Info,
     Loader2,
     Languages,
     Maximize,
@@ -35,6 +37,7 @@
     compactMeta,
     displayTitle,
     formatDuration,
+    playbackTitle,
     playbackProgress,
     shouldStartFromBeginning
   } from '../lib/recommendations';
@@ -77,9 +80,11 @@
   import {
     playbackQualityById,
     playbackQualityOptions,
+    preferredQualityForResolution,
     type PlaybackQualityId,
     type PlaybackQualityOption
   } from '../lib/playbackQuality';
+  import type { PlayerPreferences } from '../lib/playerPreferences';
   import {
     DEFAULT_PLAYER_SOURCE_ASPECT_RATIO,
     initialPlayerAspectMode,
@@ -87,6 +92,7 @@
     PLAYER_ASPECT_OPTIONS,
     PLAYER_ASPECT_STORAGE_KEY,
     playerAspectById,
+    playerMonitorAspectRatio,
     playerSourceAspectRatio,
     type PlayerAspectOption
   } from '../lib/playerAspect';
@@ -129,6 +135,8 @@
   export let nextUpItem: JellyfinItem | null = null;
   export let minimized = false;
   export let darkTheme = true;
+  export let preferDirectPlay = true;
+  export let playerPreferences: PlayerPreferences;
 
   const dispatch = createEventDispatcher<{
     recommendationSelect: ProjectedRecommendation;
@@ -182,6 +190,12 @@
     webkitExitFullscreen?: () => void;
     webkitSupportsFullscreen?: boolean;
     webkitDisplayingFullscreen?: boolean;
+    webkitDecodedFrameCount?: number;
+    webkitDroppedFrameCount?: number;
+  };
+  type VideoPlaybackQuality = {
+    totalVideoFrames: number;
+    droppedVideoFrames: number;
   };
 
   type WebKitFullscreenElement = HTMLDivElement & {
@@ -196,6 +210,7 @@
 
   type CinematicAvailability = 'idle' | 'dynamic' | 'unavailable';
   type CaptionSize = 'small' | 'normal' | 'large' | 'extra-large';
+  type CaptionStyle = 'classic' | 'outline' | 'high-contrast';
   type MiniPlayerResizeAxis = 'top' | 'left' | 'corner';
   type MiniPlayerResizeState = {
     axis: MiniPlayerResizeAxis;
@@ -272,6 +287,13 @@
   let qualityOptions: PlaybackQualityOption[] = [];
   let autoPreferDirectPlay = true;
   let qualityMenuOpen = false;
+  let infoPanelOpen = false;
+  let totalVideoFrames = 0;
+  let droppedVideoFrames = 0;
+  let estimatedBandwidth = 0;
+  let outputVideoWidth = 0;
+  let outputVideoHeight = 0;
+  let transcodedVideoCodec = '';
   let audioOptions: PlaybackAudioOption[] = [];
   let selectedAudioId = '';
   let audioMenuOpen = false;
@@ -283,12 +305,16 @@
   let subtitleMenuOpen = false;
   let activeTextTrackUrl = '';
   let captionSize = loadCaptionSize();
+  let captionStyle = loadCaptionStyle();
   let captionStyleElement: HTMLStyleElement | null = null;
+  const originalCaptionCueLines = new WeakMap<VTTCue, number | 'auto'>();
   let aspectMode = initialPlayerAspectMode(
     localStorage.getItem(PLAYER_ASPECT_STORAGE_KEY),
     localStorage.getItem(LEGACY_ULTRAWIDE_CROP_STORAGE_KEY) === 'true'
   );
+  let lastAlwaysStretchToFill = playerPreferences.alwaysStretchToFill;
   let sourceAspectRatio = DEFAULT_PLAYER_SOURCE_ASPECT_RATIO;
+  let monitorAspectRatio = playerMonitorAspectRatio(window.screen.width, window.screen.height);
   let aspectMenuOpen = false;
   let cinematicPreference = initialCinematicModePreference(localStorage.getItem('jellytube.cinematicMode'));
   let cinematicMode = cinematicModeEnabled(cinematicPreference, darkTheme);
@@ -390,7 +416,36 @@
     trickplayResolution && hoveredTrickplayTile
       ? `width: ${trickplayResolution.info.TileWidth * 100}%; height: ${trickplayResolution.info.TileHeight * 100}%; transform: translate(-${(hoveredTrickplayTile.column / trickplayResolution.info.TileWidth) * 100}%, -${(hoveredTrickplayTile.row / trickplayResolution.info.TileHeight) * 100}%)`
       : '';
-  $: sourceLabel = activeAttempt?.label ?? 'Preparing';
+  $: sourceVideoStream = mediaSource?.MediaStreams?.find((stream) => stream.Type === 'Video');
+  $: outputResolution = outputVideoWidth && outputVideoHeight
+    ? `${outputVideoWidth} × ${outputVideoHeight}`
+    : sourceVideoStream?.Width && sourceVideoStream.Height
+      ? `${sourceVideoStream.Width} × ${sourceVideoStream.Height}`
+      : 'Unavailable';
+  $: originalVideoCodec = describeVideoCodec(sourceVideoStream);
+  $: videoCodecInUse = activeAttempt?.playMethod === 'Transcode'
+    ? transcodedVideoCodec || 'Unavailable (server transcode output not reported)'
+    : originalVideoCodec;
+  $: playMethodLabel = activeAttempt?.playMethod === 'Transcode'
+    ? 'Transcoding'
+    : activeAttempt?.playMethod === 'DirectStream'
+      ? 'Direct stream'
+      : activeAttempt?.playMethod === 'DirectPlay'
+        ? 'Direct play'
+        : 'Preparing';
+  $: playerPlaybackSummary = `${playMethodLabel} · ${outputResolution}`;
+  $: playerEndTimestamp = Date.now() + Math.max(0, durationSeconds - currentTime) /
+    Math.max(0.1, video?.playbackRate ?? 1) * 1000;
+  $: playerTimeLabel = playerPreferences.showVideoEndTime
+    ? durationSeconds > 0
+      ? `${formatClock(currentTime)} / ${formatClock(durationSeconds)} (${new Date(playerEndTimestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })})`
+      : 'End time unavailable'
+    : `${formatClock(currentTime)} / ${formatClock(durationSeconds)}`;
+  $: playbackBandwidthLabel = estimatedBandwidth > 0
+    ? `${formatBitrate(estimatedBandwidth)} estimated`
+    : mediaSource?.Bitrate
+      ? `${formatBitrate(mediaSource.Bitrate)} source bitrate`
+      : 'Unavailable';
   $: playbackFormatLogo = activePlaybackFormatLogo(
     mediaSource,
     activeAttempt?.playMethod,
@@ -432,6 +487,38 @@
   $: isMusicVideo = detailedItem.Type === 'MusicVideo' || detailedItem.contentKind === 'musicVideo';
   $: isEpisode = detailedItem.Type === 'Episode' || Boolean(episodeInfo(detailedItem));
   $: cast = detailedItem.Type === 'Movie' || detailedItem.Type === 'Episode' ? actorsForItem(detailedItem) : [];
+  $: pausedCast = isEpisode && seriesCast.length ? seriesCast : cast;
+  $: pausedRelatedItems = isEpisode
+    ? episodeSeasons
+        .flatMap((season) => season.items)
+        .filter((episode) =>
+          episode.Id !== detailedItem.Id &&
+          episode.Type === 'Episode' &&
+          (!detailedItem.SeriesId || episode.SeriesId === detailedItem.SeriesId)
+        )
+        .slice(0, 4)
+    : isMovie
+      ? (() => {
+          const collectionItems = movieCollections.flatMap((group) => group.items);
+          const fallbackItems = recommendations
+            .map(recommendationPlayableItem)
+            .filter((candidate): candidate is JellyfinItem => candidate?.Type === 'Movie');
+          return [...collectionItems, ...fallbackItems]
+            .filter((candidate, index, candidates) =>
+              candidate.Id !== detailedItem.Id &&
+              candidates.findIndex((other) => other.Id === candidate.Id) === index
+            )
+            .slice(0, 4);
+        })()
+      : [];
+  $: showPausedOverlay = !minimized &&
+    started &&
+    !isPlaying &&
+    !loading &&
+    !buffering &&
+    !error &&
+    ((playerPreferences.showPausedRecommendations && pausedRelatedItems.length > 0) ||
+      (playerPreferences.showPausedCast && pausedCast.length > 0));
   $: contextLabel = isMovie ? detailedItem.sourceLibraryName || 'YouTube Movies' : channelName(detailedItem);
 
   // TV shows keep their cast on the series item; an episode's People hold only
@@ -474,10 +561,10 @@
       );
     }
   }
-  $: title = displayTitle(detailedItem, {
-    context: detailedItem.Type === 'Episode' ? 'series' : isMovie ? 'feed' : 'channel',
-    channel: contextLabel
-  });
+  $: title = playbackTitle(detailedItem);
+  $: playerTitle = playerPreferences.showExpandedVideoTitle
+    ? expandedPlaybackTitle(detailedItem)
+    : detailedItem.Name;
   $: selectedEpisodeItems =
     episodeSeasons.find((season) => season.season === selectedEpisodeSeason)?.items ??
     episodeSeasons[0]?.items ??
@@ -518,6 +605,7 @@
 
   $: if (minimized) {
     qualityMenuOpen = false;
+    infoPanelOpen = false;
     audioMenuOpen = false;
     subtitleMenuOpen = false;
     aspectMenuOpen = false;
@@ -533,7 +621,33 @@
     scheduleCinematicSample(0, !isPlaying);
   }
 
+  $: if (playerPreferences.alwaysStretchToFill && aspectMode !== 'stretch-monitor') {
+    aspectMode = 'stretch-monitor';
+    localStorage.setItem(PLAYER_ASPECT_STORAGE_KEY, aspectMode);
+  }
+  $: if (
+    !playerPreferences.alwaysStretchToFill &&
+    lastAlwaysStretchToFill &&
+    aspectMode === 'stretch-monitor'
+  ) {
+    aspectMode = 'fit';
+    localStorage.setItem(PLAYER_ASPECT_STORAGE_KEY, aspectMode);
+  }
+  $: lastAlwaysStretchToFill = playerPreferences.alwaysStretchToFill;
+  $: if (
+    playerPreferences.alwaysPlayWithCaptions &&
+    mediaSource &&
+    subtitleOptions.length > 1 &&
+    selectedSubtitleId === 'off'
+  ) {
+    const firstCaption = subtitleOptions.find((option) => option.id !== 'off');
+    if (firstCaption) void applySubtitleOption(firstCaption);
+  }
+
   onMount(() => {
+    const syncMonitorAspectRatio = () => {
+      monitorAspectRatio = playerMonitorAspectRatio(window.screen.width, window.screen.height);
+    };
     video?.setAttribute('webkit-playsinline', 'true');
     captionStyleElement = document.createElement('style');
     document.head.append(captionStyleElement);
@@ -546,12 +660,16 @@
     video?.addEventListener('webkitbeginfullscreen', handleFullscreenChange);
     video?.addEventListener('webkitendfullscreen', handleFullscreenChange);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('resize', syncMonitorAspectRatio);
+    window.screen.orientation?.addEventListener('change', syncMonitorAspectRatio);
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
       video?.removeEventListener('webkitbeginfullscreen', handleFullscreenChange);
       video?.removeEventListener('webkitendfullscreen', handleFullscreenChange);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('resize', syncMonitorAspectRatio);
+      window.screen.orientation?.removeEventListener('change', syncMonitorAspectRatio);
       captionStyleElement?.remove();
       captionStyleElement = null;
     };
@@ -737,7 +855,8 @@
         item.Id,
         startTicks,
         playbackAudioById(itemAudioOptions, itemAudioId)?.index,
-        remuxCapabilities
+        remuxCapabilities,
+        preferDirectPlay
       );
       mediaSource = playbackInfo.MediaSources[0] ?? null;
       negotiatedRemuxSource = mediaSource;
@@ -754,9 +873,16 @@
       const originalAttempt = getOriginalAttempt(mediaSource);
       const directAvailable = Boolean(originalAttempt);
       qualityOptions = playbackQualityOptions(mediaSource, { directAvailable });
-      selectedQualityId = playbackQualityById(qualityOptions, preferredQualityId)?.id ?? 'auto';
+      selectedQualityId = preferredQualityForResolution(
+        qualityOptions,
+        playerPreferences.preferredVideoResolution,
+        preferredQualityId
+      );
       subtitleOptions = buildSubtitleOptions(mediaSource);
       selectedSubtitleId = initialSubtitleId(mediaSource, subtitleOptions);
+      if (playerPreferences.alwaysPlayWithCaptions && selectedSubtitleId === 'off') {
+        selectedSubtitleId = subtitleOptions.find((option) => option.id !== 'off')?.id ?? 'off';
+      }
       activeTextTrackUrl = textTrackUrlForSelection();
       autoPreferDirectPlay = originalAttempt && remuxCapabilities && isHdrVideoSource(mediaSource)
         ? remuxCapabilities.autoPrefer
@@ -860,7 +986,7 @@
     }
 
     const hlsAttempt = getHlsAttempt(source, undefined, subtitleOption);
-    if (autoPreferDirectPlay) {
+    if (preferDirectPlay || autoPreferDirectPlay) {
       if (originalAttempt) nextAttempts.push(originalAttempt);
       if (hlsAttempt) nextAttempts.push(hlsAttempt);
     } else {
@@ -1014,6 +1140,7 @@
     attemptIndex = index;
     activeAttempt = attempt;
     playMethod = attempt.playMethod;
+    transcodedVideoCodec = '';
     loading = true;
     clearBuffering();
     error = '';
@@ -1071,6 +1198,10 @@
         if (attempt.playMethod !== 'DirectStream' || !hls) return;
         const baseLayerLevel = hlsRemuxBaseLayerLevel(data.levels, remuxCapabilities);
         if (baseLayerLevel >= 0) hls.currentLevel = baseLayerLevel;
+      });
+      hls.on(HlsPlayer.Events.LEVEL_SWITCHED, () => {
+        const codec = hls?.levels[hls.currentLevel]?.videoCodec;
+        transcodedVideoCodec = codec?.toUpperCase() ?? '';
       });
       hls.loadSource(attempt.url);
       hls.attachMedia(video);
@@ -1227,6 +1358,56 @@
     return [source.Container, videoStream?.Codec, audioStream?.Codec, resolution].filter(Boolean).join(' · ');
   }
 
+  function describeVideoCodec(stream?: JellyfinMediaStream) {
+    if (!stream?.Codec) return 'Unavailable';
+    return [
+      stream.Codec.toUpperCase(),
+      stream.Profile,
+      stream.BitDepth ? `${stream.BitDepth}-bit` : '',
+      stream.PixelFormat
+    ].filter(Boolean).join(' · ');
+  }
+
+  function expandedPlaybackTitle(playbackItem: JellyfinItem) {
+    const itemIsEpisode = playbackItem.Type === 'Episode' || Boolean(episodeInfo(playbackItem));
+    if (itemIsEpisode) {
+      const episodeName = playbackItem.Name;
+      const seriesName = episodeSeriesTitle || playbackItem.SeriesName || 'Series';
+      const code = episodeCode(playbackItem);
+      const parsedPremiereDate = playbackItem.PremiereDate
+        ? new Date(playbackItem.PremiereDate)
+        : null;
+      const premiereDate = parsedPremiereDate && Number.isFinite(parsedPremiereDate.getTime())
+        ? parsedPremiereDate.toLocaleDateString(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+          })
+        : '';
+      return [
+        seriesName,
+        code,
+        episodeName,
+        premiereDate ? `Aired ${premiereDate}` : ''
+      ].filter(Boolean).join(' · ');
+    }
+
+    const itemIsMovie = playbackItem.Type === 'Movie' || playbackItem.contentKind === 'movie';
+    if (!itemIsMovie) return playbackItem.Name;
+    const parsedReleaseDate = playbackItem.PremiereDate
+      ? new Date(playbackItem.PremiereDate)
+      : null;
+    const year = playbackItem.ProductionYear ?? (
+      parsedReleaseDate && Number.isFinite(parsedReleaseDate.getTime())
+        ? parsedReleaseDate.getFullYear()
+        : undefined
+    );
+    const rating = typeof playbackItem.CommunityRating === 'number'
+      ? `${playbackItem.CommunityRating.toFixed(1)} / 10`
+      : '';
+    return [playbackItem.Name, year ? String(year) : '', rating].filter(Boolean).join(' · ');
+  }
+
   function buildSubtitleOptions(source: JellyfinMediaSource): SubtitleOption[] {
     const options: SubtitleOption[] = [{ id: 'off', label: 'Off', detail: 'No captions', stream: null, index: null, delivery: 'off' }];
     for (const stream of source.MediaStreams ?? []) {
@@ -1276,6 +1457,13 @@
       : 'normal';
   }
 
+  function loadCaptionStyle(): CaptionStyle {
+    const stored = localStorage.getItem('jellytube.captionStyle');
+    return stored === 'classic' || stored === 'outline' || stored === 'high-contrast'
+      ? stored
+      : 'classic';
+  }
+
   function handleCaptionSizeChange(event: Event) {
     const value = (event.currentTarget as HTMLSelectElement).value;
     if (value !== 'small' && value !== 'normal' && value !== 'large' && value !== 'extra-large') {
@@ -1286,15 +1474,49 @@
     updateCaptionStyle();
   }
 
+  function handleCaptionStyleChange(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    if (value !== 'classic' && value !== 'outline' && value !== 'high-contrast') return;
+    captionStyle = value;
+    localStorage.setItem('jellytube.captionStyle', value);
+    updateCaptionStyle();
+  }
+
   function updateCaptionStyle() {
     const fontSizes: Record<CaptionSize, string> = {
-      small: '75%',
-      normal: '100%',
-      large: '125%',
-      'extra-large': '150%'
+      small: '82.5%',
+      normal: '110%',
+      large: '137.5%',
+      'extra-large': '165%'
     };
+    const styles: Record<CaptionStyle, { color: string; background: string; shadow: string }> = {
+      classic: {
+        color: '#fff',
+        background: 'rgba(0, 0, 0, 0.72)',
+        shadow: 'none'
+      },
+      outline: {
+        color: '#fff',
+        background: 'transparent',
+        shadow: '0 2px 3px #000, 0 0 6px #000'
+      },
+      'high-contrast': {
+        color: '#ffeb3b',
+        background: '#000',
+        shadow: 'none'
+      }
+    };
+    const style = styles[captionStyle];
     if (captionStyleElement) {
-      captionStyleElement.textContent = `video::cue { font-size: ${fontSizes[captionSize]} !important; }`;
+      captionStyleElement.textContent = `
+        video::cue {
+          font-size: ${fontSizes[captionSize]} !important;
+          color: ${style.color} !important;
+          background-color: ${style.background} !important;
+          text-shadow: ${style.shadow} !important;
+        }
+        video::-webkit-media-text-track-container { transform: translateY(-5%); }
+      `;
     }
   }
 
@@ -1343,6 +1565,14 @@
     for (let index = 0; index < video.textTracks.length; index += 1) {
       const track = video.textTracks[index];
       track.mode = activeTextTrackUrl && option?.delivery === 'track' ? 'showing' : 'disabled';
+      if (track.mode !== 'showing' || !track.cues) continue;
+      for (let cueIndex = 0; cueIndex < track.cues.length; cueIndex += 1) {
+        const cue = track.cues[cueIndex];
+        if (typeof VTTCue === 'undefined' || !(cue instanceof VTTCue)) continue;
+        if (!originalCaptionCueLines.has(cue)) originalCaptionCueLines.set(cue, cue.line);
+        const originalLine = originalCaptionCueLines.get(cue) ?? 'auto';
+        cue.line = originalLine === 'auto' ? -2 : Math.max(-100, originalLine - 2);
+      }
     }
   }
 
@@ -1509,7 +1739,38 @@
     isMuted = video?.muted ?? false;
     volume = video?.volume ?? volume;
     syncBuffered();
+    syncPlaybackMetrics();
     maybeAdvancePlayingNextBeforeEnd();
+  }
+
+  function syncPlaybackMetrics() {
+    if (!video) return;
+    outputVideoWidth = video.videoWidth;
+    outputVideoHeight = video.videoHeight;
+    const quality = typeof video.getVideoPlaybackQuality === 'function'
+      ? video.getVideoPlaybackQuality() as VideoPlaybackQuality
+      : null;
+    totalVideoFrames =
+      quality?.totalVideoFrames ?? video.webkitDecodedFrameCount ?? totalVideoFrames;
+    droppedVideoFrames =
+      quality?.droppedVideoFrames ?? video.webkitDroppedFrameCount ?? droppedVideoFrames;
+    estimatedBandwidth = hls?.bandwidthEstimate ?? 0;
+  }
+
+  function bufferAheadSeconds() {
+    if (!video) return 0;
+    for (let index = 0; index < video.buffered.length; index += 1) {
+      if (video.buffered.start(index) <= video.currentTime && video.buffered.end(index) >= video.currentTime) {
+        return Math.max(0, video.buffered.end(index) - video.currentTime);
+      }
+    }
+    return 0;
+  }
+
+  function formatBitrate(bitsPerSecond: number) {
+    if (!Number.isFinite(bitsPerSecond) || bitsPerSecond <= 0) return 'Unavailable';
+    const megabits = bitsPerSecond / 1_000_000;
+    return megabits >= 1 ? `${megabits.toFixed(1)} Mbps` : `${Math.round(bitsPerSecond / 1_000)} kbps`;
   }
 
   function handleVolumeChange() {
@@ -1663,6 +1924,7 @@
       qualityMenuOpen = false;
       subtitleMenuOpen = false;
       aspectMenuOpen = false;
+      infoPanelOpen = false;
     }
     controlsVisible = true;
     if (!audioMenuOpen) scheduleControls();
@@ -1779,9 +2041,25 @@
       subtitleMenuOpen = false;
       audioMenuOpen = false;
       aspectMenuOpen = false;
+      infoPanelOpen = false;
     }
     controlsVisible = true;
     if (!qualityMenuOpen) scheduleControls();
+  }
+
+  function toggleInfoPanel(event: MouseEvent) {
+    event.stopPropagation();
+    infoPanelOpen = !infoPanelOpen;
+    if (infoPanelOpen) {
+      window.clearTimeout(controlsTimer);
+      controlsTimer = 0;
+      qualityMenuOpen = false;
+      audioMenuOpen = false;
+      subtitleMenuOpen = false;
+      aspectMenuOpen = false;
+    }
+    controlsVisible = true;
+    if (!infoPanelOpen) scheduleControls();
   }
 
   async function selectQuality(event: MouseEvent, option: PlaybackQualityOption) {
@@ -1831,6 +2109,7 @@
       qualityMenuOpen = false;
       audioMenuOpen = false;
       aspectMenuOpen = false;
+      infoPanelOpen = false;
     }
     controlsVisible = true;
     if (!subtitleMenuOpen) scheduleControls();
@@ -1838,6 +2117,10 @@
 
   async function selectSubtitle(event: MouseEvent, option: SubtitleOption) {
     event.stopPropagation();
+    await applySubtitleOption(option);
+  }
+
+  async function applySubtitleOption(option: SubtitleOption) {
     subtitleMenuOpen = false;
     controlsVisible = true;
     if (!mediaSource || option.id === selectedSubtitleId) {
@@ -1899,6 +2182,7 @@
       qualityMenuOpen = false;
       subtitleMenuOpen = false;
       audioMenuOpen = false;
+      infoPanelOpen = false;
     }
     controlsVisible = true;
     if (!aspectMenuOpen) scheduleControls();
@@ -2160,12 +2444,13 @@
   }
 
   function handleKeydown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && (qualityMenuOpen || subtitleMenuOpen || audioMenuOpen || aspectMenuOpen)) {
+    if (event.key === 'Escape' && (qualityMenuOpen || subtitleMenuOpen || audioMenuOpen || aspectMenuOpen || infoPanelOpen)) {
       event.preventDefault();
       qualityMenuOpen = false;
       subtitleMenuOpen = false;
       audioMenuOpen = false;
       aspectMenuOpen = false;
+      infoPanelOpen = false;
       scheduleControls();
       return;
     }
@@ -2232,7 +2517,7 @@
     if (prefersTvInput()) return;
     window.clearTimeout(controlsTimer);
     controlsTimer = 0;
-    if (!isPlaying) return;
+    if (!isPlaying || infoPanelOpen) return;
     qualityMenuOpen = false;
     audioMenuOpen = false;
     subtitleMenuOpen = false;
@@ -2243,7 +2528,7 @@
   function scheduleControls() {
     if (prefersTvInput()) return;
     window.clearTimeout(controlsTimer);
-    if (!isPlaying || qualityMenuOpen || subtitleMenuOpen || audioMenuOpen || aspectMenuOpen) return;
+    if (!isPlaying || infoPanelOpen || qualityMenuOpen || subtitleMenuOpen || audioMenuOpen || aspectMenuOpen) return;
     controlsTimer = window.setTimeout(() => {
       controlsVisible = false;
     }, 2400);
@@ -2495,11 +2780,13 @@
       class:cinematic-ready={cinematicReady && !minimized}
       class:cinematic-unavailable={cinematicAvailability === 'unavailable' && !minimized}
       class:aspect-stretch={selectedAspect.behavior === 'stretch'}
+      class:aspect-stretch-monitor={aspectMode === 'stretch-monitor'}
       class:aspect-stretch-4-3={aspectMode === 'stretch-4-3'}
+      class:aspect-stretch-16-10={aspectMode === 'stretch-16-10'}
       class:aspect-stretch-16-9={aspectMode === 'stretch-16-9'}
       class:aspect-stretch-21-9={aspectMode === 'stretch-21-9'}
       class:ultrawide-crop={aspectMode === 'crop-21-9'}
-      style={`--player-source-aspect: ${sourceAspectRatio}`}
+      style={`--player-source-aspect: ${sourceAspectRatio}; --player-monitor-aspect: ${monitorAspectRatio}`}
     >
       <canvas
         bind:this={cinematicCanvas}
@@ -2570,7 +2857,7 @@
           </video>
         </div>
 
-        <div class="player-title-overlay" aria-hidden="true" title={title}>{title}</div>
+        <div class="player-title-overlay" aria-hidden="true" title={playerTitle}>{playerTitle}</div>
 
         {#if playbackFormatLogo && !loading && !error}
           <div
@@ -2648,6 +2935,42 @@
             <button class="center-play" aria-label="Play" on:click={togglePlay}>
               <Play size={34} fill="currentColor" />
             </button>
+          {/if}
+
+          {#if showPausedOverlay}
+            <div class="paused-player-overlay">
+              {#if playerPreferences.showPausedRecommendations && pausedRelatedItems.length}
+                <section class="paused-player-recommendations" aria-label={isEpisode ? 'More episodes' : 'Related movies'}>
+                  <h2>{isEpisode ? 'More episodes' : 'Related movies'}</h2>
+                  <div class="paused-player-items">
+                    {#each pausedRelatedItems as relatedItem (relatedItem.Id)}
+                      <button
+                        class="paused-player-item"
+                        aria-label={`Play ${relatedItem.Name}`}
+                        on:click|stopPropagation={() => dispatch(isEpisode ? 'episodeSelect' : 'relatedSelect', relatedItem)}
+                      >
+                        <span class="paused-player-item-image">
+                          {#if client.getImageUrl(relatedItem, 320)}
+                            <img src={client.getImageUrl(relatedItem, 320)} alt="" loading="lazy" />
+                          {:else}
+                            <span>{relatedItem.Name.slice(0, 1)}</span>
+                          {/if}
+                        </span>
+                        <strong>{relatedItem.Name}</strong>
+                      </button>
+                    {/each}
+                  </div>
+                </section>
+              {/if}
+              {#if playerPreferences.showPausedCast && pausedCast.length}
+                <ActorCast
+                  {client}
+                  actors={pausedCast.slice(0, 4)}
+                  heading="Cast"
+                  on:select={(event) => dispatch('actor', event.detail.actor)}
+                />
+              {/if}
+            </div>
           {/if}
 
           {#if fallbackNotice}
@@ -2805,7 +3128,6 @@
                   <span>10</span>
                 </span>
               </button>
-
               {#if isEpisode && episodePrevious}
                 <button
                   class="player-control episode-nav-control"
@@ -2862,8 +3184,10 @@
                 />
               </div>
 
-              <span class="player-time">{formatClock(currentTime)} / {formatClock(durationSeconds)}</span>
-              <span class="player-source-pill" title={activeAttempt?.detail}>{sourceLabel}</span>
+              <span class="player-time">{playerTimeLabel}</span>
+              {#if playerPreferences.showPlaybackInfo}
+                <span class="player-source-pill" title={activeAttempt?.detail}>{playerPlaybackSummary}</span>
+              {/if}
 
               {#if isMusicVideo}
                 <button
@@ -2914,170 +3238,232 @@
                 {/if}
               </div>
 
-              <button
-                class="player-control theater-control"
-                class:active={theaterMode}
-                aria-label={theaterMode ? 'Default view' : 'Theater mode'}
-                title={theaterMode ? 'Default view' : 'Theater mode'}
-                on:click={toggleTheaterMode}
-              >
-                <RectangleHorizontal size={21} />
-              </button>
-
-              {#if audioOptions.length > 1}
-                <div class="quality-control audio-control">
-                  <button
-                    class="player-control audio-button"
-                    class:active={audioMenuOpen}
-                    aria-label={`Audio track: ${audioButtonLabel}`}
-                    aria-expanded={audioMenuOpen}
-                    aria-haspopup="menu"
-                    title={`Audio track: ${audioButtonLabel}`}
-                    on:click={toggleAudioMenu}
-                  >
-                    <Languages size={21} />
-                  </button>
-
-                  {#if audioMenuOpen}
-                    <div class="quality-menu subtitle-menu audio-menu" role="menu" aria-label="Audio tracks">
-                      <div class="quality-menu-heading">Audio</div>
-                      {#each audioOptions as option (option.id)}
-                        <button
-                          class:active={option.id === selectedAudioId}
-                          class="quality-option audio-option"
-                          role="menuitemradio"
-                          aria-checked={option.id === selectedAudioId}
-                          on:click={(event) => void selectAudio(event, option)}
-                        >
-                          <span>
-                            <strong>{option.label}</strong>
-                            <small>{option.detail}</small>
-                          </span>
-                          {#if option.id === selectedAudioId}
-                            <Check size={16} />
-                          {/if}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-
-              {#if subtitleOptions.length > 1}
-                <div class="quality-control subtitle-control">
-                  <button
-                    class="player-control subtitle-button"
-                    class:active={subtitleActive || subtitleMenuOpen}
-                    aria-label={`Captions: ${subtitleButtonLabel}`}
-                    aria-expanded={subtitleMenuOpen}
-                    aria-haspopup="menu"
-                    title={`Captions: ${subtitleButtonLabel}`}
-                    on:click={toggleSubtitleMenu}
-                  >
-                    <Captions size={21} />
-                  </button>
-
-                  {#if subtitleMenuOpen}
-                    <div class="quality-menu subtitle-menu" role="menu" aria-label="Captions">
-                      <div class="quality-menu-heading">Captions</div>
-                      <label class="caption-size-setting">
-                        <span>Caption size</span>
-                        <select value={captionSize} on:change={handleCaptionSizeChange}>
-                          <option value="small">Small</option>
-                          <option value="normal">Normal</option>
-                          <option value="large">Large</option>
-                          <option value="extra-large">Extra large</option>
-                        </select>
-                      </label>
-                      {#if selectedSubtitleOption()?.delivery === 'burn'}
-                        <p class="caption-size-note">Burned-in captions use the server's size.</p>
-                      {/if}
-                      {#each subtitleOptions as option (option.id)}
-                        <button
-                          class:active={option.id === selectedSubtitleId}
-                          class="quality-option subtitle-option"
-                          role="menuitemradio"
-                          aria-checked={option.id === selectedSubtitleId}
-                          on:click={(event) => void selectSubtitle(event, option)}
-                        >
-                          <span>
-                            <strong>{option.label}</strong>
-                            <small>{option.detail}</small>
-                          </span>
-                          {#if option.id === selectedSubtitleId}
-                            <Check size={16} />
-                          {/if}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-
-              <div class="quality-control">
-                <button
-                  class="player-control quality-button"
-                  class:active={qualityMenuOpen}
-                  aria-label="Settings"
-                  aria-expanded={qualityMenuOpen}
-                  aria-haspopup="menu"
-                  title="Settings"
-                  on:click={toggleQualityMenu}
-                >
-                  <Settings size={21} />
-                </button>
-
-                {#if qualityMenuOpen}
-                  <div class="quality-menu settings-menu" role="menu" aria-label="Settings">
-                    <div class="quality-menu-heading">Settings</div>
+              <div class="player-end-actions">
+                {#if audioOptions.length > 1}
+                  <div class="quality-control audio-control">
                     <button
-                      class="settings-option ambient-mode-option"
-                      class:active={cinematicMode}
-                      class:unavailable={cinematicAvailability === 'unavailable' && cinematicPreference}
-                      role="menuitemcheckbox"
-                      aria-checked={cinematicMode}
-                      disabled={!darkTheme}
-                      on:click={toggleCinematicMode}
+                      class="player-control audio-button"
+                      class:active={audioMenuOpen}
+                      aria-label={`Audio track: ${audioButtonLabel}`}
+                      aria-expanded={audioMenuOpen}
+                      aria-haspopup="menu"
+                      title={`Audio track: ${audioButtonLabel}`}
+                      on:click={toggleAudioMenu}
                     >
-                      <span class="settings-option-icon"><Sparkles size={19} /></span>
-                      <span class="settings-option-copy">
-                        <strong>Ambient mode</strong>
-                        <small>{cinematicSettingDetail}</small>
-                      </span>
-                      <span class:active={cinematicMode} class="settings-toggle" aria-hidden="true"><i></i></span>
+                      <Languages size={21} />
                     </button>
-                    <div class="settings-menu-divider"></div>
-                    <div class="quality-menu-heading">Quality</div>
-                    {#each qualityOptions as option (option.id)}
-                      <button
-                        class:active={option.id === selectedQualityId}
-                        class="quality-option"
-                        role="menuitemradio"
-                        aria-checked={option.id === selectedQualityId}
-                        on:click={(event) => void selectQuality(event, option)}
-                      >
-                        <span>
-                          <strong>{option.label}</strong>
-                          <small>{option.detail}</small>
-                        </span>
-                        {#if option.id === selectedQualityId}
-                          <Check size={16} />
-                        {/if}
-                      </button>
-                    {/each}
+                    {#if audioMenuOpen}
+                      <div class="quality-menu subtitle-menu audio-menu" role="menu" aria-label="Audio tracks">
+                        <div class="quality-menu-heading">Audio</div>
+                        {#each audioOptions as option (option.id)}
+                          <button
+                            class:active={option.id === selectedAudioId}
+                            class="quality-option audio-option"
+                            role="menuitemradio"
+                            aria-checked={option.id === selectedAudioId}
+                            on:click={(event) => void selectAudio(event, option)}
+                          >
+                            <span>
+                              <strong>{option.label}</strong>
+                              <small>{option.detail}</small>
+                            </span>
+                            {#if option.id === selectedAudioId}
+                              <Check size={16} />
+                            {/if}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
                 {/if}
-              </div>
-
-              <button class="player-control fullscreen-control" aria-label="Toggle fullscreen" on:click={() => void toggleFullscreen()}>
-                {#if fullscreen}
-                  <Minimize size={22} />
-                {:else}
-                  <Maximize size={22} />
+                {#if subtitleOptions.length > 1}
+                  <div class="quality-control subtitle-control">
+                    <button
+                      class="player-control subtitle-button"
+                      class:active={subtitleActive || subtitleMenuOpen}
+                      aria-label={`Captions: ${subtitleButtonLabel}`}
+                      aria-expanded={subtitleMenuOpen}
+                      aria-haspopup="menu"
+                      title={`Captions: ${subtitleButtonLabel}`}
+                      on:click={toggleSubtitleMenu}
+                    >
+                      <Captions size={21} />
+                    </button>
+                    {#if subtitleMenuOpen}
+                      <div class="quality-menu subtitle-menu" role="menu" aria-label="Captions">
+                        <div class="quality-menu-heading">Captions</div>
+                        <label class="caption-size-setting">
+                          <span>Caption size</span>
+                          <select value={captionSize} on:change={handleCaptionSizeChange}>
+                            <option value="small">Small</option>
+                            <option value="normal">Normal</option>
+                            <option value="large">Large</option>
+                            <option value="extra-large">Extra large</option>
+                          </select>
+                        </label>
+                        <label class="caption-size-setting">
+                          <span>Caption style</span>
+                          <select value={captionStyle} on:change={handleCaptionStyleChange}>
+                            <option value="classic">Classic</option>
+                            <option value="outline">Outline</option>
+                            <option value="high-contrast">High contrast</option>
+                          </select>
+                        </label>
+                        {#if selectedSubtitleOption()?.delivery === 'burn'}
+                          <p class="caption-size-note">Burned-in captions use the server's size.</p>
+                        {/if}
+                        {#each subtitleOptions as option (option.id)}
+                          <button
+                            class:active={option.id === selectedSubtitleId}
+                            class="quality-option subtitle-option"
+                            role="menuitemradio"
+                            aria-checked={option.id === selectedSubtitleId}
+                            on:click={(event) => void selectSubtitle(event, option)}
+                          >
+                            <span>
+                              <strong>{option.label}</strong>
+                              <small>{option.detail}</small>
+                            </span>
+                            {#if option.id === selectedSubtitleId}
+                              <Check size={16} />
+                            {/if}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
                 {/if}
-              </button>
+                <button
+                  class="player-control theater-control"
+                  class:active={theaterMode}
+                  aria-label={theaterMode ? 'Default view' : 'Theater mode'}
+                  title={theaterMode ? 'Default view' : 'Theater mode'}
+                  on:click={toggleTheaterMode}
+                >
+                  <RectangleHorizontal size={21} />
+                </button>
+                <div class="player-info-control">
+                  <button
+                    class="player-control info-button"
+                    class:active={infoPanelOpen}
+                    aria-label="Video information"
+                    aria-expanded={infoPanelOpen}
+                    aria-haspopup="dialog"
+                    title="Video information"
+                    on:click={toggleInfoPanel}
+                  >
+                    <Info size={21} />
+                  </button>
+                </div>
+                <a
+                  class="player-control download-control"
+                  href={client.getDownloadUrl(detailedItem.Id)}
+                  download
+                  aria-label={`Download ${title}`}
+                  title="Download video"
+                >
+                  <Download size={21} />
+                </a>
+                <div class="quality-control settings-control">
+                  <button
+                    class="player-control quality-button"
+                    class:active={qualityMenuOpen}
+                    aria-label="Settings"
+                    aria-expanded={qualityMenuOpen}
+                    aria-haspopup="menu"
+                    title="Settings"
+                    on:click={toggleQualityMenu}
+                  >
+                    <Settings size={21} />
+                  </button>
+                  {#if qualityMenuOpen}
+                    <div class="quality-menu settings-menu" role="menu" aria-label="Settings">
+                      <div class="quality-menu-heading">Settings</div>
+                      <button
+                        class="settings-option ambient-mode-option"
+                        class:active={cinematicMode}
+                        class:unavailable={cinematicAvailability === 'unavailable' && cinematicPreference}
+                        role="menuitemcheckbox"
+                        aria-checked={cinematicMode}
+                        disabled={!darkTheme}
+                        on:click={toggleCinematicMode}
+                      >
+                        <span class="settings-option-icon"><Sparkles size={19} /></span>
+                        <span class="settings-option-copy">
+                          <strong>Ambient mode</strong>
+                          <small>{cinematicSettingDetail}</small>
+                        </span>
+                        <span class:active={cinematicMode} class="settings-toggle" aria-hidden="true"><i></i></span>
+                      </button>
+                      <div class="settings-menu-divider"></div>
+                      <div class="quality-menu-heading">Quality</div>
+                      {#each qualityOptions as option (option.id)}
+                        <button
+                          class:active={option.id === selectedQualityId}
+                          class="quality-option"
+                          role="menuitemradio"
+                          aria-checked={option.id === selectedQualityId}
+                          on:click={(event) => void selectQuality(event, option)}
+                        >
+                          <span>
+                            <strong>{option.label}</strong>
+                            <small>{option.detail}</small>
+                          </span>
+                          {#if option.id === selectedQualityId}
+                            <Check size={16} />
+                          {/if}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+                <button class="player-control fullscreen-control" aria-label="Toggle fullscreen" on:click={() => void toggleFullscreen()}>
+                  {#if fullscreen}
+                    <Minimize size={22} />
+                  {:else}
+                    <Maximize size={22} />
+                  {/if}
+                </button>
+              </div>
             </div>
           </div>
+          {#if infoPanelOpen}
+            <div
+              class="player-info-panel"
+              role="dialog"
+              aria-label="Current video information"
+              tabindex="-1"
+              on:click|stopPropagation
+              on:keydown|stopPropagation
+            >
+              <div class="player-info-heading">Video information</div>
+              <dl>
+                <div><dt>Playback</dt><dd>{playMethodLabel}</dd></div>
+                <div><dt>Resolution</dt><dd>{outputResolution}</dd></div>
+                <div><dt>Codec in use</dt><dd>{videoCodecInUse}</dd></div>
+                <div><dt>Original video codec</dt><dd>{originalVideoCodec}</dd></div>
+                <div>
+                  <dt>Audio codec</dt>
+                  <dd>{selectedAudio?.stream?.Codec?.toUpperCase() ?? 'Unavailable'}</dd>
+                </div>
+                <div><dt>Bandwidth</dt><dd>{playbackBandwidthLabel}</dd></div>
+                <div>
+                  <dt>Frames</dt>
+                  <dd>
+                    {totalVideoFrames
+                      ? `${droppedVideoFrames} dropped / ${totalVideoFrames} decoded`
+                      : 'Unavailable'}
+                  </dd>
+                </div>
+                <div><dt>Buffer ahead</dt><dd>{formatClock(bufferAheadSeconds())}</dd></div>
+                <div><dt>Container</dt><dd>{mediaSource?.Container ?? 'Unavailable'}</dd></div>
+                <div>
+                  <dt>Stream</dt>
+                  <dd>{activeAttempt?.detail ?? (mediaSource ? mediaSummary(mediaSource) : 'Unavailable')}</dd>
+                </div>
+              </dl>
+            </div>
+          {/if}
         {/if}
       </div>
     </div>

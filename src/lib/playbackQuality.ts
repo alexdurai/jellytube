@@ -1,4 +1,5 @@
 import type { JellyfinMediaSource } from './types';
+import type { PreferredVideoResolution } from './playerPreferences';
 
 export type PlaybackQualityId = 'auto' | 'direct' | `hls-${number}k`;
 
@@ -110,6 +111,23 @@ export function playbackQualityById(
   qualityId: string | null | undefined
 ) {
   return options.find((option) => option.id === qualityId) ?? options[0];
+}
+
+export function preferredQualityForResolution(
+  options: PlaybackQualityOption[],
+  resolution: PreferredVideoResolution,
+  fallbackId: string | null | undefined
+): PlaybackQualityId {
+  if (resolution === 'max') return playbackQualityById(options, fallbackId)?.id ?? 'auto';
+
+  const maximumHeight = Number(resolution);
+  const eligible = options
+    .filter((option) => option.mode === 'hls' && (option.maxHeight ?? Infinity) <= maximumHeight)
+    .sort((left, right) =>
+      (right.maxHeight ?? 0) - (left.maxHeight ?? 0) ||
+      (right.videoBitrate ?? 0) - (left.videoBitrate ?? 0)
+    );
+  return eligible[0]?.id ?? options.find((option) => option.mode === 'auto')?.id ?? 'auto';
 }
 
 export function sourceVideoHeight(source: JellyfinMediaSource) {
