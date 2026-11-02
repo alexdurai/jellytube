@@ -49,6 +49,7 @@ import {
   continueWatching,
   displayTitle,
   groupByChannel,
+  playbackTitle,
   personalPlaybackActivity,
   rankRecommendations,
   shouldStartFromBeginning,
@@ -73,8 +74,13 @@ import {
 } from '../src/lib/cinematicGlow';
 import {
   playbackQualityById,
-  playbackQualityOptions
+  playbackQualityOptions,
+  preferredQualityForResolution
 } from '../src/lib/playbackQuality';
+import {
+  DEFAULT_PLAYER_PREFERENCES,
+  parsePlayerPreferences
+} from '../src/lib/playerPreferences';
 import { applyProgressiveResult } from '../src/lib/progressiveLoad';
 import { latestAddedSections } from '../src/lib/homeLatest';
 import {
@@ -82,6 +88,7 @@ import {
   initialPlayerAspectMode,
   PLAYER_ASPECT_OPTIONS,
   playerAspectById,
+  playerMonitorAspectRatio,
   playerSourceAspectRatio
 } from '../src/lib/playerAspect';
 import {
@@ -585,6 +592,27 @@ test('recommendation context keeps titles concise in mixed feeds', () => {
   assert.equal(displayTitle(sketch, { context: 'recommendation', channel: 'Saturday Night Live' }), 'The Stand Off');
 });
 
+test('playback titles include episode context and movie years', () => {
+  const episode = item({
+    Id: 'homeland',
+    Name: 'Paean to the People',
+    Type: 'Episode',
+    SeriesName: 'Homeland',
+    SeriesId: 'homeland-series',
+    ParentIndexNumber: 7,
+    IndexNumber: 12
+  });
+  const movie = item({
+    Id: 'movie',
+    Name: 'Example Movie',
+    Type: 'Movie',
+    ProductionYear: 2024
+  });
+
+  assert.equal(playbackTitle(episode), 'Homeland S07E12 - Paean to the People');
+  assert.equal(playbackTitle(movie), 'Example Movie (2024)');
+});
+
 test('short partially watched videos are restarted instead of resumed', () => {
   const short = item({
     Id: 'short-started',
@@ -782,11 +810,41 @@ test('playback quality options use bitrate labels and filter above source resolu
 test('player aspect modes expose non-cropping stretch targets and validate saved choices', () => {
   assert.deepEqual(
     PLAYER_ASPECT_OPTIONS.filter((option) => option.behavior === 'stretch').map((option) => option.id),
-    ['stretch-4-3', 'stretch-16-9', 'stretch-21-9']
+    ['stretch-monitor', 'stretch-4-3', 'stretch-16-10', 'stretch-16-9', 'stretch-21-9']
   );
+  assert.equal(playerAspectById('stretch-monitor')?.label, 'Stretch (fill)');
+  assert.equal(playerAspectById('stretch-16-10')?.label, 'Stretch to 16:10');
   assert.equal(playerAspectById('stretch-21-9')?.label, 'Stretch to 21:9');
   assert.equal(initialPlayerAspectMode('stretch-16-9'), 'stretch-16-9');
   assert.equal(initialPlayerAspectMode('unsupported'), 'fit');
+});
+
+test('preferred video resolution selects the highest available quality within the configured cap', () => {
+  const options = playbackQualityOptions({
+    Id: 'source',
+    MediaStreams: [{ Type: 'Video', Codec: 'h264', Width: 3840, Height: 2160 }]
+  });
+  assert.equal(preferredQualityForResolution(options, '1080', 'auto'), 'hls-12000k');
+  assert.equal(preferredQualityForResolution(options, '720', 'auto'), 'hls-4000k');
+  assert.equal(preferredQualityForResolution(options, 'max', 'hls-2000k'), 'hls-2000k');
+});
+
+test('player preferences safely load defaults and preserve valid options', () => {
+  assert.deepEqual(parsePlayerPreferences(null), DEFAULT_PLAYER_PREFERENCES);
+  assert.deepEqual(parsePlayerPreferences('{broken'), DEFAULT_PLAYER_PREFERENCES);
+  assert.deepEqual(
+    parsePlayerPreferences(JSON.stringify({
+      alwaysStretchToFill: true,
+      showVideoEndTime: true,
+      preferredVideoResolution: '1080'
+    })),
+    {
+      ...DEFAULT_PLAYER_PREFERENCES,
+      alwaysStretchToFill: true,
+      showVideoEndTime: true,
+      preferredVideoResolution: '1080'
+    }
+  );
 });
 
 test('player aspect mode migrates the former ultrawide crop preference', () => {
@@ -799,6 +857,11 @@ test('player source aspect follows intrinsic video dimensions with a safe fallba
   assert.equal(playerSourceAspectRatio(1080, 1920), 1080 / 1920);
   assert.equal(playerSourceAspectRatio(0, 1080), DEFAULT_PLAYER_SOURCE_ASPECT_RATIO);
   assert.equal(playerSourceAspectRatio(undefined, undefined, 2.4), 2.4);
+});
+
+test('player monitor aspect follows display dimensions with a safe fallback', () => {
+  assert.equal(playerMonitorAspectRatio(2560, 1440), 2560 / 1440);
+  assert.equal(playerMonitorAspectRatio(0, 1440), DEFAULT_PLAYER_SOURCE_ASPECT_RATIO);
 });
 
 test('playback audio options keep indexed audio streams and preserve duplicate labels', () => {
@@ -2709,6 +2772,9 @@ test('Emby client uses Emby token query casing and omits unsupported trickplay f
     }));
     assert.equal(itemImage.searchParams.get('api_key'), 'emby-token');
     assert.equal(itemImage.searchParams.has('ApiKey'), false);
+    const userImage = new URL(client.getUserImageUrl('user-1'));
+    assert.equal(userImage.pathname, '/Users/user-1/Images/Primary');
+    assert.equal(userImage.searchParams.get('api_key'), 'emby-token');
 
     await client.getItem('item-1');
     const detailUrl = new URL(requests[0]);
@@ -2846,6 +2912,7 @@ test('Jellyfin playback requests carry selected audio indexes and keep direct pl
   };
     await client.getPlaybackInfo('video-1', 50_000_000, 2, remuxCapabilities);
     await client.getPlaybackInfo('video-1', 0, -1);
+    await client.getPlaybackInfo('video-1', 0, -1, remuxCapabilities, false);
 
     assert.equal(requests[0].body.AudioStreamIndex, 2);
     assert.equal('AudioStreamIndex' in requests[1].body, false);
@@ -2860,6 +2927,8 @@ test('Jellyfin playback requests carry selected audio indexes and keep direct pl
     assert.equal('AllowVideoStreamCopy' in requests[0].body, false);
     assert.equal('AllowAudioStreamCopy' in requests[0].body, false);
     assert.equal('EnableDirectPlay' in requests[1].body, false);
+    assert.equal(requests[2].body.EnableDirectPlay, false);
+    assert.equal(requests[2].body.EnableDirectStream, true);
 
     const selectedUrl = new URL(client.getHlsUrl('video-1', 'source-1', {
       audioStreamIndex: 2,
@@ -2902,6 +2971,57 @@ test('Jellyfin playback requests carry selected audio indexes and keep direct pl
       delete (globalThis as { localStorage?: Storage }).localStorage;
     } else {
       Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: originalLocalStorage });
+    }
+  }
+});
+
+test('playback history uses the server-wide DatePlayed order across pages', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLocalStorage = globalThis.localStorage;
+  const requestUrls: URL[] = [];
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: () => 'test-device',
+      setItem: () => undefined
+    }
+  });
+  globalThis.fetch = async (input) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
+    requestUrls.push(url);
+    const startIndex = Number(url.searchParams.get('StartIndex'));
+    const items = startIndex === 0
+      ? Array.from({ length: 100 }, (_, index) => ({ Id: `item-${index}`, Name: `Item ${index}`, Type: 'Movie' }))
+      : [{ Id: 'item-100', Name: 'Item 100', Type: 'Movie' }];
+    return new Response(JSON.stringify({ Items: items, TotalRecordCount: 101 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  };
+
+  try {
+    const client = new JellyfinClient('http://jellyfin.test', 'access-token', 'user-1');
+    const history = await client.getPlaybackHistory(150);
+
+    assert.equal(history.length, 101);
+    assert.deepEqual(history.slice(0, 3).map(({ Id }) => Id), ['item-0', 'item-1', 'item-2']);
+    assert.equal(requestUrls.length, 2);
+    assert.equal(requestUrls[0].searchParams.has('ParentId'), false);
+    assert.equal(requestUrls[0].searchParams.get('SortBy'), 'DatePlayed');
+    assert.equal(requestUrls[0].searchParams.get('SortOrder'), 'Descending');
+    assert.equal(requestUrls[0].searchParams.get('Filters'), 'IsPlayed');
+    assert.equal(requestUrls[0].searchParams.get('IncludeItemTypes'), 'Movie,Episode,Video,MusicVideo');
+    assert.equal(requestUrls[1].searchParams.get('StartIndex'), '100');
+    assert.equal(client.getDownloadUrl('item-1'), 'http://jellyfin.test/Items/item-1/Download?ApiKey=access-token');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocalStorage === undefined) {
+      delete (globalThis as { localStorage?: Storage }).localStorage;
+    } else {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: originalLocalStorage
+      });
     }
   }
 });

@@ -33,6 +33,8 @@ export type JellyfinLibrary = {
   CollectionType?: string;
   Type?: string;
   ChildCount?: number;
+  RecursiveItemCount?: number;
+  ItemCount?: number;
   ImageTags?: Record<string, string>;
 };
 

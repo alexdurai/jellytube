@@ -50,6 +50,7 @@
   let userName = '';
   let libraries: JellyfinLibrary[] = [];
   let selectedLibraryIds: string[] = [];
+  let libraryCountsLoading = false;
 
   onMount(async () => {
     try {
@@ -137,6 +138,30 @@
       if (libraries.length === 0) {
         throw new JellyfinError('No supported Shows, Home Videos & Photos, Movies, or Music Videos libraries were found for this user.');
       }
+      libraryCountsLoading = true;
+      libraries = await Promise.all(
+        libraries.map(async (library) => {
+          const knownCount = library.ChildCount ?? library.RecursiveItemCount;
+          if (knownCount && knownCount > 0) return { ...library, ItemCount: knownCount };
+          try {
+            const source = libraryToSelectedSource(library);
+            if (!source) return library;
+            const response = await authenticatedClient.getItems({
+              parentId: source.id,
+              itemTypes: source.collectionType === 'tvshows' ? 'Series' : source.itemTypes,
+              limit: 1
+            });
+            return { ...library, ItemCount: response.TotalRecordCount };
+          } catch (caught) {
+            console.warn(
+              `Could not load item count for library "${library.Name}":`,
+              caught instanceof Error ? caught.message : caught
+            );
+            return library;
+          }
+        })
+      );
+      libraryCountsLoading = false;
       selectedLibraryIds = libraries.map((library) => library.Id);
 
       serverUrl = normalized;
@@ -149,6 +174,7 @@
           ? caught.message
           : 'Could not sign in to the media server.';
     } finally {
+      libraryCountsLoading = false;
       loading = false;
     }
   }
@@ -275,7 +301,16 @@
             >
               <Library size={22} />
               <span class="library-name">{library.Name}</span>
-              <span class="library-meta">{libraryKindLabel(library.CollectionType)} · {library.ChildCount ?? 0} items</span>
+              <span class="library-meta">
+                {libraryKindLabel(library.CollectionType)} ·
+                {#if libraryCountsLoading}
+                  Loading count…
+                {:else if library.ItemCount !== undefined}
+                  {library.ItemCount} items
+                {:else}
+                  Count unavailable
+                {/if}
+              </span>
               <span class="library-check">{selectedLibraryIds.includes(library.Id) ? 'Selected' : 'Add'}</span>
             </button>
           {/each}

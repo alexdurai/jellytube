@@ -287,6 +287,20 @@ export function displayTitle(item: JellyfinItem, options: DisplayTitleOptions = 
   return item.Name;
 }
 
+export function playbackTitle(item: JellyfinItem) {
+  if (item.Type === 'Movie' || item.contentKind === 'movie') {
+    const year = item.ProductionYear ?? yearFromDate(item.PremiereDate);
+    return year ? `${item.Name} (${year})` : item.Name;
+  }
+  return displayTitle(item);
+}
+
+function yearFromDate(value?: string) {
+  if (!value) return 0;
+  const year = new Date(value).getFullYear();
+  return Number.isFinite(year) ? year : 0;
+}
+
 export function channelName(item: JellyfinItem) {
   if (item.Type === 'Movie' || item.contentKind === 'movie') {
     return item.sourceLibraryName || 'YouTube Movies';
