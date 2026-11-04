@@ -537,6 +537,7 @@
             </small>
           </span>
         </button>
+        {:else}
         <span class="music-now-main">
           <span class="music-now-art">
             {#if client.getImageUrl(current, 220)}
