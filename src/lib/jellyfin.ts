@@ -116,7 +116,7 @@ export function annotateItems(items: JellyfinItem[], source: SelectedLibrary) {
 
 const itemFields = [
   'PrimaryImageAspectRatio',
-  'BackdropImageTags',
+  'ImageTags',
   'Overview',
   'DateCreated',
   'PremiereDate',

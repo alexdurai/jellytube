@@ -389,8 +389,11 @@
         fetchArtistSongs(artist)
       ]);
       if (activeArtist?.Id !== artist.Id) return;
+      // Adopt the fetched detail as the hero item: it carries ImageTags (and
+      // Overview/Genres), which the grid item or album-link stub may lack —
+      // without them getImageUrl returns '' and the hero renders no picture.
+      activeArtist = detail ?? activeArtist;
       artistInfo = detail;
-      artistAlbums = albumItems;
       artistSongs = songsForArtist;
     } catch {
       artistAlbums = [];
