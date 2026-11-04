@@ -99,7 +99,6 @@ import {
   countdownSecondsRemaining,
   episodePlayingNextItem,
   episodePlayingPreviousItem,
-  seriesNextUpItem,
   shouldAdvancePlayingNext,
   shouldShowPlayingNext
 } from '../src/lib/playingNext';
@@ -1844,15 +1843,6 @@ test('playing previous selects the previous episode from the active season and s
   assert.equal(episodePlayingPreviousItem(current, [previous, current, next])?.Id, 's01e01');
   assert.equal(episodePlayingPreviousItem(previous, [previous, current, next]), null);
   assert.equal(episodePlayingPreviousItem(current, [current]), null);
-});
-
-test('series next up finds the server-selected episode for the show instead of the next old episode', () => {
-  const oldEpisode = episodeItem('show', 1, 2);
-  const serverNextUp = episodeItem('show', 3, 7);
-  const anotherShow = episodeItem('other-show', 1, 4);
-
-  assert.equal(seriesNextUpItem(oldEpisode, [anotherShow, oldEpisode, serverNextUp])?.Id, serverNextUp.Id);
-  assert.equal(seriesNextUpItem(oldEpisode, [anotherShow, oldEpisode]), null);
 });
 
 test('search suggestions only fetch for supported routes and useful queries', () => {

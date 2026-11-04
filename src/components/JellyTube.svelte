@@ -42,7 +42,6 @@
     episodeInfo,
     type EpisodeSeason
   } from '../lib/episodes';
-  import { seriesNextUpItem } from '../lib/playingNext';
   import { compareByContentDateDesc, contentDate, contentDateValue, dateValue, relativeDate } from '../lib/dates';
   import {
     channelMatches,
@@ -146,9 +145,6 @@
   let activePlaybackEpisodeSeason = 0;
   let selectedChannelSeason = 0;
   let activePlaybackAutoplay = false;
-  let activeSeriesNextUp: JellyfinItem | null = null;
-  let activeSeriesNextUpResolved = false;
-  let activeSeriesNextUpGeneration = 0;
   let selectedChannel = '';
   let selectedActor: JellyfinItem | null = null;
   let actorWork: JellyfinItem[] = [];
@@ -315,16 +311,6 @@
   $: episodeCollection = activePlaybackItem ? episodeCollectionForItem(activePlaybackItem, episodePool) : null;
   $: watchQueue = episodeCollection ? episodeCollection.allItems : activePlaybackQueue;
   $: watchQueueTitle = episodeCollection ? episodeCollection.seriesName : activePlaybackQueueName;
-  $: activePlaybackNextUpCandidates = activeSeriesNextUpResolved
-    ? activeSeriesNextUp
-      ? [activeSeriesNextUp]
-      : []
-    : activeSeriesNextUp
-      ? [activeSeriesNextUp, ...nextUp]
-      : nextUp;
-  $: activePlaybackNextUp = activePlaybackItem
-    ? seriesNextUpItem(activePlaybackItem, activePlaybackNextUpCandidates)
-    : null;
   $: activeEpisodeSeason =
     episodeCollection && activePlaybackEpisodeSeason
       ? activePlaybackEpisodeSeason
@@ -1363,24 +1349,6 @@
     activePlaybackQueueName = collection ? collection.seriesName : queueName;
     activePlaybackEpisodeSeason = episodeInfo(item)?.season ?? 0;
     activePlaybackAutoplay = autoplay;
-    void loadActiveSeriesNextUp(item);
-  }
-
-  async function loadActiveSeriesNextUp(item: JellyfinItem) {
-    const generation = ++activeSeriesNextUpGeneration;
-    activeSeriesNextUp = seriesNextUpItem(item, nextUp);
-    activeSeriesNextUpResolved = false;
-    if (!item.SeriesId) return;
-
-    try {
-      const response = await client.getNextUp({ seriesId: item.SeriesId, limit: 3 });
-      if (generation !== activeSeriesNextUpGeneration || activePlaybackItem?.Id !== item.Id) return;
-      const candidates = normalizeSeriesEpisodes(response.Items ?? [], item);
-      activeSeriesNextUp = seriesNextUpItem(item, candidates);
-      activeSeriesNextUpResolved = true;
-    } catch {
-      // Keep the home-feed match when a server cannot fulfill the series-specific query.
-    }
   }
 
   function playItemFromPlayer(
@@ -1413,14 +1381,11 @@
   }
 
   function closePlayback() {
-    activeSeriesNextUpGeneration += 1;
     activePlaybackItem = null;
     activePlaybackQueue = [];
     activePlaybackQueueName = '';
     activePlaybackEpisodeSeason = 0;
     activePlaybackAutoplay = false;
-    activeSeriesNextUp = null;
-    activeSeriesNextUpResolved = false;
     watchRecommendations = [];
     watchRecommendationContextKey = '';
   }
@@ -2453,10 +2418,8 @@
           selectedEpisodeSeason={activeEpisodeSeason}
           episodeSeriesTitle={episodeCollection?.seriesName ?? ''}
           recommendations={watchRecommendations}
-          nextUpItem={activePlaybackNextUp}
           on:back={goBackOrHome}
           on:recommendationSelect={(event) => handleRecommendationSelect(event.detail)}
-          on:nextUpSelect={(event) => playItemFromPlayer(event.detail)}
           on:queueSelect={(event) => playItemFromPlayer(event.detail, watchQueue, watchQueueTitle, true)}
           on:episodeSelect={(event) => playItemFromPlayer(event.detail, watchQueue, watchQueueTitle, true)}
           on:episodeSeason={(event) => (activePlaybackEpisodeSeason = event.detail)}
