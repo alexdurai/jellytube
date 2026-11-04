@@ -1,12 +1,15 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { Play } from 'lucide-svelte';
+  import { Pause, Play } from 'lucide-svelte';
   import type { JellyfinClient } from '../../lib/jellyfin';
   import { displayTitle } from '../../lib/recommendations';
   import type { JellyfinItem } from '../../lib/types';
 
   export let client: JellyfinClient;
   export let album: JellyfinItem;
+  // True while this album is the one playing: the hover control shows Pause
+  // and toggles playback instead of restarting the album.
+  export let playingNow = false;
 
   // play = play the album, open = go to the album page, artist = go to the artist
   const dispatch = createEventDispatcher<{ play: JellyfinItem; open: JellyfinItem; artist: JellyfinItem }>();
@@ -28,8 +31,18 @@
         {/if}
       </span>
     </button>
-    <button class="music-album-play" aria-label={"Play album " + title} title={"Play " + title} on:click={() => dispatch('play', album)}>
-      <Play size={18} fill="currentColor" aria-hidden="true" />
+    <button
+      class="music-album-play"
+      class:active={playingNow}
+      aria-label={(playingNow ? 'Pause album ' : 'Play album ') + title}
+      title={(playingNow ? 'Pause ' : 'Play ') + title}
+      on:click={() => dispatch('play', album)}
+    >
+      {#if playingNow}
+        <Pause size={18} fill="currentColor" aria-hidden="true" />
+      {:else}
+        <Play size={18} fill="currentColor" aria-hidden="true" />
+      {/if}
     </button>
   </span>
 
@@ -117,6 +130,10 @@
     transform: translateY(0);
   }
   .music-album-play:hover {
+    background: var(--brand);
+  }
+  /* Playing album: the hover control stays visible as a Pause button. */
+  .music-album-play.active {
     background: var(--brand);
   }
   .music-album-title,
