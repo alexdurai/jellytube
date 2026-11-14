@@ -4855,11 +4855,23 @@ label {
   top: 78px;
   z-index: 15;
   align-self: start;
+  height: calc(100dvh - 98px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .recommendation-rail {
   grid-column: 2;
   grid-row: 1;
+}
+
+.watch-layout:not(.minimized):not(.theater-mode) .recommendation-rail {
+  position: sticky;
+  top: 78px;
+  height: calc(100dvh - 98px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  align-self: start;
 }
 
 .watch-layout.theater-mode {
@@ -4903,6 +4915,13 @@ label {
 }
 
 @media (max-width: 1016px) {
+  .watch-layout:not(.minimized) .watch-left,
+  .watch-layout:not(.minimized) .recommendation-rail {
+    position: static;
+    height: auto;
+    overflow: visible;
+  }
+
   .watch-left,
   .watch-main,
   .recommendation-rail,
