@@ -199,6 +199,17 @@
           </label>
           <label class="player-option-row">
             <span>
+              <strong>Show paused panel background</strong>
+              <small>Show the translucent background behind paused recommendations and cast.</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={preferences.showPausedOverlayBackground}
+              on:change={(event) => update('showPausedOverlayBackground', (event.currentTarget as HTMLInputElement).checked)}
+            />
+          </label>
+          <label class="player-option-row">
+            <span>
               <strong>Show playback method and resolution</strong>
               <small>Show Direct Play, Direct Stream, or Transcoding and the video resolution.</small>
             </span>
@@ -206,6 +217,17 @@
               type="checkbox"
               checked={preferences.showPlaybackInfo}
               on:change={(event) => update('showPlaybackInfo', (event.currentTarget as HTMLInputElement).checked)}
+            />
+          </label>
+          <label class="player-option-row">
+            <span>
+              <strong>Picture-in-picture on window blur</strong>
+              <small>Enter picture-in-picture while video is playing when this window loses focus.</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={preferences.autoPictureInPictureOnBlur}
+              on:change={(event) => update('autoPictureInPictureOnBlur', (event.currentTarget as HTMLInputElement).checked)}
             />
           </label>
         </div>

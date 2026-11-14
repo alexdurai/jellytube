@@ -10,8 +10,6 @@ const host = process.env.JELLYTUBE_HOST || '0.0.0.0';
 const port = Number(process.env.JELLYTUBE_PORT || process.env.PORT || 4173);
 const serverUrl =
   process.env.SERVER_URL ||
-  process.env.MEDIA_SERVER_URL ||
-  process.env.JELLYFIN_URL ||
   'http://localhost:8096';
 const serverType = process.env.SERVER_TYPE || 'auto';
 const indexPath = join(distDir, 'index.html');

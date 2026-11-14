@@ -8,6 +8,8 @@ export type PlayerPreferences = {
   showPlaybackInfo: boolean;
   showPausedRecommendations: boolean;
   showPausedCast: boolean;
+  showPausedOverlayBackground: boolean;
+  autoPictureInPictureOnBlur: boolean;
   preferredVideoResolution: PreferredVideoResolution;
 };
 
@@ -21,6 +23,8 @@ export const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
   showPlaybackInfo: true,
   showPausedRecommendations: true,
   showPausedCast: true,
+  showPausedOverlayBackground: true,
+  autoPictureInPictureOnBlur: false,
   preferredVideoResolution: 'max'
 };
 
@@ -56,6 +60,9 @@ export function parsePlayerPreferences(value: string | null | undefined): Player
       showPlaybackInfo: stored.showPlaybackInfo !== false,
       showPausedRecommendations: stored.showPausedRecommendations !== false,
       showPausedCast: stored.showPausedCast !== false,
+      showPausedOverlayBackground:
+        stored.showPausedOverlayBackground !== false && stored.showPausedOverlayShadow !== false,
+      autoPictureInPictureOnBlur: stored.autoPictureInPictureOnBlur === true,
       preferredVideoResolution: isPreferredVideoResolution(stored.preferredVideoResolution)
         ? stored.preferredVideoResolution
         : 'max'

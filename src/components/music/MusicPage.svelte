@@ -16,7 +16,10 @@
   // otherwise the album/artist being displayed. Passed down from the app router.
   export let item: { kind: 'album' | 'artist'; id: string } | null = null;
 
-  const dispatch = createEventDispatcher<{ navigate: { kind: 'album' | 'artist'; id: string } | null }>();
+  const dispatch = createEventDispatcher<{
+    navigate: { kind: 'album' | 'artist'; id: string } | null;
+    playbackStart: void;
+  }>();
 
   let error = '';
   let albums: JellyfinItem[] = [];
@@ -289,7 +292,9 @@
 
   // ---- Playback ----
   function playTrackList(list: JellyfinItem[], startIndex: number) {
-    if (list.length) playTracks(list, startIndex, true);
+    if (!list.length) return;
+    dispatch('playbackStart');
+    playTracks(list, startIndex, true);
   }
 
   function playAlbum(album: JellyfinItem) {

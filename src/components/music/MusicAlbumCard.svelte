@@ -13,19 +13,41 @@
 
   // play = play the album, open = go to the album page, artist = go to the artist
   const dispatch = createEventDispatcher<{ play: JellyfinItem; open: JellyfinItem; artist: JellyfinItem }>();
+  let imageFailed = false;
+  let imageFallbackAttempted = false;
+  let imageFallbackUrl = '';
 
   $: artist = album.AlbumArtist || album.Artists?.join(', ') || '';
-  $: imageUrl = client.getImageUrl(album, 360);
+  $: imageUrl = imageFallbackUrl || client.getImageUrl(album, 360) || client.getPrimaryImageUrl(album.Id, 360);
   $: title = displayTitle(album);
   $: hasArtist = artist.length > 0;
+
+  async function handleImageError() {
+    if (imageFallbackAttempted) {
+      imageFailed = true;
+      return;
+    }
+
+    imageFallbackAttempted = true;
+    try {
+      const tracks = (await client.getAlbumTracks(album.Id)).Items ?? [];
+      const track = tracks.find((candidate) => candidate.ImageTags?.Primary) ?? tracks[0];
+      imageFallbackUrl = track
+        ? client.getImageUrl(track, 360) || client.getPrimaryImageUrl(track.Id, 360)
+        : '';
+      if (!imageFallbackUrl) imageFailed = true;
+    } catch {
+      imageFailed = true;
+    }
+  }
 </script>
 
 <div class="music-album-card">
   <span class="music-album-art-wrap">
     <button class="music-album-art-btn" aria-label={"Open album " + title} on:click={() => dispatch('open', album)}>
       <span class="music-album-art">
-        {#if imageUrl}
-          <img src={imageUrl} alt="" loading="lazy" />
+        {#if imageUrl && !imageFailed}
+          <img src={imageUrl} alt="" loading="lazy" on:error={handleImageError} />
         {:else}
           <span class="music-art-fallback">{title.slice(0, 1)}</span>
         {/if}

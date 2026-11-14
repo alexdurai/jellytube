@@ -97,7 +97,8 @@
   import PlaybackOptionsModal from './PlaybackOptionsModal.svelte';
   import MusicPage from './music/MusicPage.svelte';
   import MusicPlayer from './music/MusicPlayer.svelte';
-  import { musicPlayerState, playTracks } from '../lib/music/store';
+  import MusicSongRow from './music/MusicSongRow.svelte';
+  import { musicPlayerState, playTracks, togglePlayPause } from '../lib/music/store';
   import {
     loadPlayerPreferences,
     savePlayerPreferences,
@@ -216,6 +217,8 @@
   let channelLoading = false;
   let activity: PlaybackActivity[] = [];
   let historyItems: JellyfinItem[] = [];
+  let listenHistoryItems: JellyfinItem[] = [];
+  let historyTab: 'watch' | 'listen' = 'watch';
   let historyLoading = false;
   let historyLoaded = false;
   let historyError = '';
@@ -246,13 +249,29 @@
     historyLoading = true;
     historyError = '';
     try {
-      historyItems = await client.getPlaybackHistory();
+      const [watched, listened] = await Promise.all([
+        client.getPlaybackHistory(),
+        client.getListenHistory()
+      ]);
+      historyItems = watched;
+      listenHistoryItems = listened;
       historyLoaded = true;
     } catch (caught) {
-      historyError = caught instanceof Error ? caught.message : 'Could not load watch history.';
+      historyError = caught instanceof Error ? caught.message : 'Could not load playback history.';
     } finally {
       historyLoading = false;
     }
+  }
+
+  function playHistoryTrack(index: number) {
+    const track = listenHistoryItems[index];
+    if (!track) return;
+    if (track.Id === $musicPlayerState.currentId) {
+      togglePlayPause();
+      return;
+    }
+    if (activePlaybackItem) closePlayback();
+    playTracks(listenHistoryItems, index, true);
   }
 
   function persistPreferDirectPlay(event: Event) {
@@ -1341,6 +1360,7 @@
         (candidate) => candidate.contentKind === 'audio' || candidate.Type === 'Audio'
       );
       const startIndex = audioResults.findIndex((candidate) => candidate.Id === item.Id);
+      if (activePlaybackItem) closePlayback();
       playTracks(audioResults.length ? audioResults : [item], Math.max(0, startIndex));
       return;
     }
@@ -2132,8 +2152,46 @@
       randomSeed: item?.Id,
       relatedItemScores: item ? watchRelatedItemScores.get(item.Id) : undefined
     });
-    const filteredRanks = item ? watchRecommendationCandidates(ranked, item) : ranked;
+    let filteredRanks = item ? watchRecommendationCandidates(ranked, item) : ranked;
+    if (item && isMusicVideoItem(item)) {
+      const currentAlbumId = item.AlbumId?.trim();
+      const currentAlbumName = normalizeSearch(item.Album ?? '');
+      const currentArtistIds = new Set(
+        [...(item.ArtistItems ?? []), ...(item.AlbumArtists ?? [])]
+          .map((artist) => artist.Id?.trim())
+          .filter((id): id is string => Boolean(id))
+      );
+      const currentArtistNames = new Set([
+        ...(item.Artists ?? []),
+        item.AlbumArtist ?? '',
+        ...(item.ArtistItems ?? []).map((artist) => artist.Name),
+        ...(item.AlbumArtists ?? []).map((artist) => artist.Name)
+      ].map(normalizeSearch).filter(Boolean));
+      const sameAlbum = (candidate: JellyfinItem) => isMusicVideoItem(candidate) && Boolean(
+        (currentAlbumId && candidate.AlbumId?.trim() === currentAlbumId) ||
+        (currentAlbumName && normalizeSearch(candidate.Album ?? '') === currentAlbumName)
+      );
+      const sameArtist = (candidate: JellyfinItem) => {
+        if (!isMusicVideoItem(candidate)) return false;
+        const candidateArtists = [...(candidate.ArtistItems ?? []), ...(candidate.AlbumArtists ?? [])];
+        if (candidateArtists.some((artist) => artist.Id && currentArtistIds.has(artist.Id.trim()))) return true;
+        return [
+          ...(candidate.Artists ?? []),
+          candidate.AlbumArtist ?? '',
+          ...candidateArtists.map((artist) => artist.Name)
+        ].some((name) => currentArtistNames.has(normalizeSearch(name)));
+      };
+      filteredRanks = [
+        ...filteredRanks.filter(sameAlbum),
+        ...filteredRanks.filter((candidate) => !sameAlbum(candidate) && sameArtist(candidate)),
+        ...filteredRanks.filter((candidate) => !sameAlbum(candidate) && !sameArtist(candidate))
+      ];
+    }
     return projectRecommendations(filteredRanks, videoPool, seriesPool);
+  }
+
+  function isMusicVideoItem(item: JellyfinItem) {
+    return item.Type === 'MusicVideo' || item.contentKind === 'musicVideo';
   }
 
   function syncWatchRecommendations(
@@ -2620,6 +2678,7 @@
           on:back={goBackOrHome}
           on:recommendationSelect={(event) => handleRecommendationSelect(event.detail)}
           on:relatedSelect={(event) => playItemFromPlayer(event.detail)}
+          on:options={openPlayerOptions}
           on:nextUpSelect={(event) => playItemFromPlayer(event.detail)}
           on:queueSelect={(event) => playItemFromPlayer(event.detail, watchQueue, watchQueueTitle, true)}
           on:episodeSelect={(event) => playItemFromPlayer(event.detail, watchQueue, watchQueueTitle, true)}
@@ -2789,7 +2848,13 @@
       </section>
     {:else if route === 'music'}
       {#if audioSources.length}
-        <MusicPage {client} sources={audioSources} item={musicItem} on:navigate={(event) => onMusicNavigate(event.detail)} />
+        <MusicPage
+          {client}
+          sources={audioSources}
+          item={musicItem}
+          on:navigate={(event) => onMusicNavigate(event.detail)}
+          on:playbackStart={() => activePlaybackItem && closePlayback()}
+        />
       {:else}
         <div class="empty-state">
           <p>Add a Jellyfin or Emby <strong>Music</strong> library to use the audio player.</p>
@@ -3187,9 +3252,29 @@
       <section class="feed-section history-page">
         <div class="section-heading">
           <div>
-            <h2>Watch history</h2>
-            <span>Recently watched from your selected libraries</span>
+            <h2>{historyTab === 'watch' ? 'Watch history' : 'Listen history'}</h2>
+            <span>{historyTab === 'watch' ? 'Recently watched from your selected libraries' : 'Recently played music and audio'}</span>
           </div>
+        </div>
+        <div class="history-tabs" role="tablist" aria-label="Playback history type">
+          <button
+            class:active={historyTab === 'watch'}
+            type="button"
+            role="tab"
+            aria-selected={historyTab === 'watch'}
+            on:click={() => (historyTab = 'watch')}
+          >
+            Watch
+          </button>
+          <button
+            class:active={historyTab === 'listen'}
+            type="button"
+            role="tab"
+            aria-selected={historyTab === 'listen'}
+            on:click={() => (historyTab = 'listen')}
+          >
+            Listen
+          </button>
         </div>
         {#if historyError}
           <div class="status-error">
@@ -3198,7 +3283,7 @@
           </div>
         {:else if historyLoading}
           <div class="empty-state compact">Loading watch history…</div>
-        {:else if historyItems.length}
+        {:else if historyTab === 'watch' && historyItems.length}
           <div class="video-grid">
             {#each historyItems as item (item.Id)}
               <VideoCard
@@ -3209,8 +3294,20 @@
               />
             {/each}
           </div>
+        {:else if historyTab === 'listen' && listenHistoryItems.length}
+          <div class="history-music-list">
+            {#each listenHistoryItems as song, index (song.Id)}
+              <MusicSongRow
+                {song}
+                rank={index + 1}
+                active={$musicPlayerState.currentId === song.Id}
+                playingNow={$musicPlayerState.currentId === song.Id && $musicPlayerState.playing}
+                on:select={() => playHistoryTrack(index)}
+              />
+            {/each}
+          </div>
         {:else}
-          <div class="empty-state compact">Nothing watched yet.</div>
+          <div class="empty-state compact">{historyTab === 'watch' ? 'Nothing watched yet.' : 'Nothing listened to yet.'}</div>
         {/if}
       </section>
     {:else if route === 'channel'}

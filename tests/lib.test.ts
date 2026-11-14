@@ -836,15 +836,20 @@ test('player preferences safely load defaults and preserve valid options', () =>
     parsePlayerPreferences(JSON.stringify({
       alwaysStretchToFill: true,
       showVideoEndTime: true,
+      showPausedOverlayBackground: false,
+      autoPictureInPictureOnBlur: true,
       preferredVideoResolution: '1080'
     })),
     {
       ...DEFAULT_PLAYER_PREFERENCES,
       alwaysStretchToFill: true,
       showVideoEndTime: true,
+      showPausedOverlayBackground: false,
+      autoPictureInPictureOnBlur: true,
       preferredVideoResolution: '1080'
     }
   );
+  assert.equal(parsePlayerPreferences('{"showPausedOverlayShadow":false}').showPausedOverlayBackground, false);
 });
 
 test('player aspect mode migrates the former ultrawide crop preference', () => {
@@ -2772,6 +2777,10 @@ test('Emby client uses Emby token query casing and omits unsupported trickplay f
     }));
     assert.equal(itemImage.searchParams.get('api_key'), 'emby-token');
     assert.equal(itemImage.searchParams.has('ApiKey'), false);
+    const primaryImage = new URL(client.getPrimaryImageUrl('item-without-tag', 360));
+    assert.equal(primaryImage.pathname, '/Items/item-without-tag/Images/Primary');
+    assert.equal(primaryImage.searchParams.get('fillWidth'), '360');
+    assert.equal(primaryImage.searchParams.get('api_key'), 'emby-token');
     const userImage = new URL(client.getUserImageUrl('user-1'));
     assert.equal(userImage.pathname, '/Users/user-1/Images/Primary');
     assert.equal(userImage.searchParams.get('api_key'), 'emby-token');
@@ -2975,7 +2984,7 @@ test('Jellyfin playback requests carry selected audio indexes and keep direct pl
   }
 });
 
-test('playback history uses the server-wide DatePlayed order across pages', async () => {
+test('playback history samples each video type and merges by last played date', async () => {
   const originalFetch = globalThis.fetch;
   const originalLocalStorage = globalThis.localStorage;
   const requestUrls: URL[] = [];
@@ -2989,10 +2998,19 @@ test('playback history uses the server-wide DatePlayed order across pages', asyn
   globalThis.fetch = async (input) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
     requestUrls.push(url);
-    const startIndex = Number(url.searchParams.get('StartIndex'));
-    const items = startIndex === 0
-      ? Array.from({ length: 100 }, (_, index) => ({ Id: `item-${index}`, Name: `Item ${index}`, Type: 'Movie' }))
-      : [{ Id: 'item-100', Name: 'Item 100', Type: 'Movie' }];
+    const itemType = url.searchParams.get('IncludeItemTypes') ?? '';
+    const dateByType: Record<string, string> = {
+      Movie: '2026-03-04T00:00:00Z',
+      Episode: '2026-03-03T00:00:00Z',
+      Video: '2026-03-02T00:00:00Z',
+      MusicVideo: '2026-03-01T00:00:00Z'
+    };
+    const items = [{
+      Id: itemType,
+      Name: itemType,
+      Type: itemType,
+      UserData: { LastPlayedDate: dateByType[itemType] }
+    }];
     return new Response(JSON.stringify({ Items: items, TotalRecordCount: 101 }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
@@ -3001,18 +3019,30 @@ test('playback history uses the server-wide DatePlayed order across pages', asyn
 
   try {
     const client = new JellyfinClient('http://jellyfin.test', 'access-token', 'user-1');
-    const history = await client.getPlaybackHistory(150);
+    const history = await client.getPlaybackHistory(4);
 
-    assert.equal(history.length, 101);
-    assert.deepEqual(history.slice(0, 3).map(({ Id }) => Id), ['item-0', 'item-1', 'item-2']);
-    assert.equal(requestUrls.length, 2);
+    assert.deepEqual(history.map(({ Id }) => Id), ['Movie', 'Episode', 'Video', 'MusicVideo']);
+    assert.equal(requestUrls.length, 8);
     assert.equal(requestUrls[0].searchParams.has('ParentId'), false);
     assert.equal(requestUrls[0].searchParams.get('SortBy'), 'DatePlayed');
     assert.equal(requestUrls[0].searchParams.get('SortOrder'), 'Descending');
     assert.equal(requestUrls[0].searchParams.get('Filters'), 'IsPlayed');
-    assert.equal(requestUrls[0].searchParams.get('IncludeItemTypes'), 'Movie,Episode,Video,MusicVideo');
-    assert.equal(requestUrls[1].searchParams.get('StartIndex'), '100');
+    assert.deepEqual(requestUrls.map((url) => url.searchParams.get('IncludeItemTypes')), [
+      'Movie', 'Movie', 'Episode', 'Episode', 'Video', 'Video', 'MusicVideo', 'MusicVideo'
+    ]);
+    assert.deepEqual(requestUrls.map((url) => url.searchParams.get('Filters')), [
+      'IsPlayed', 'IsResumable', 'IsPlayed', 'IsResumable',
+      'IsPlayed', 'IsResumable', 'IsPlayed', 'IsResumable'
+    ]);
     assert.equal(client.getDownloadUrl('item-1'), 'http://jellyfin.test/Items/item-1/Download?ApiKey=access-token');
+
+    const listened = await client.getListenHistory(10);
+    assert.equal(requestUrls[8].searchParams.get('IncludeItemTypes'), 'Audio');
+    assert.equal(requestUrls[9].searchParams.get('IncludeItemTypes'), 'Audio');
+    assert.deepEqual([requestUrls[8], requestUrls[9]].map((url) => url.searchParams.get('Filters')), [
+      'IsPlayed', 'IsResumable'
+    ]);
+    assert.deepEqual(listened.map(({ Id }) => Id), ['Audio']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalLocalStorage === undefined) {

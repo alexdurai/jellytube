@@ -2437,7 +2437,7 @@ label {
   position: absolute;
   left: 50%;
   top: 50%;
-  z-index: 9;
+  z-index: 11;
   width: 74px;
   height: 74px;
   display: grid;
@@ -2492,14 +2492,15 @@ label {
 
 .paused-player-overlay {
   position: absolute;
-  left: 14px;
-  right: 14px;
+  left: 50%;
+  width: min(920px, calc(100% - 28px));
   bottom: 86px;
   z-index: 10;
-  max-height: min(48%, 320px);
+  max-height: min(68%, 680px);
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
-  overflow: auto;
+  overflow: hidden;
   padding: 12px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 12px;
@@ -2508,10 +2509,64 @@ label {
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
   backdrop-filter: blur(14px);
   pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.paused-player-overlay.no-background {
+  border-color: transparent;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.paused-player-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.paused-player-tabs,
+.paused-player-layout-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.paused-player-tab,
+.paused-player-layout-toggle button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.72);
+  background: transparent;
+  pointer-events: auto;
+}
+
+.paused-player-tab.active,
+.paused-player-layout-toggle button.active {
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.paused-player-tab:hover,
+.paused-player-layout-toggle button:hover,
+.paused-player-tab:focus-visible,
+.paused-player-layout-toggle button:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .paused-player-recommendations {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .paused-player-recommendations h2 {
@@ -2520,9 +2575,34 @@ label {
 }
 
 .paused-player-items {
+  max-height: min(52vh, 480px);
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  overflow: auto;
+}
+
+.paused-player-items.list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.paused-player-items.list .paused-player-item {
+  grid-template-columns: minmax(96px, 150px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.paused-player-items.list .paused-player-item-image {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+
+.paused-player-items.list .paused-player-item > strong {
+  display: -webkit-box;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .paused-player-item {
@@ -2569,6 +2649,12 @@ label {
   min-width: 0;
   margin: 0;
   pointer-events: auto;
+}
+
+.paused-player-cast {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .paused-player-overlay :global(.cast-heading) {
@@ -3994,6 +4080,8 @@ label {
 }
 
 .next-up-panel {
+  position: relative;
+  z-index: 6;
   display: grid;
   gap: 12px;
   margin-bottom: 8px;
@@ -4016,6 +4104,13 @@ label {
 
 .next-up-heading > div {
   min-width: 0;
+}
+
+.next-up-heading-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .next-up-heading span {
@@ -4152,10 +4247,46 @@ label {
   font-weight: 700;
 }
 
+.tv-autoplay-panel {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 0;
+}
+
 .autoplay-next input {
   width: 16px;
   height: 16px;
   accent-color: var(--brand);
+}
+
+.history-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-tabs button {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  font-weight: 700;
+}
+
+.history-tabs button.active {
+  border-bottom-color: var(--brand);
+  color: var(--text);
+}
+
+.history-tabs button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.history-music-list {
+  max-width: 1100px;
 }
 
 .queue-complete {
@@ -4892,6 +5023,9 @@ label {
   grid-column: 1 / -1;
   grid-row: 1;
   align-self: start;
+  height: calc(100dvh - 94px);
+  display: grid;
+  align-items: center;
 }
 
 .watch-layout.theater-mode .watch-main {
@@ -4906,8 +5040,17 @@ label {
 }
 
 .watch-layout.theater-mode .player-shell {
-  height: auto;
+  width: auto;
+  height: 100%;
+  max-width: 100%;
   padding-top: 0;
+}
+
+.watch-layout.theater-mode .player-frame {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  justify-items: center;
 }
 
 .watch-layout.theater-mode .player-frame.cinematic .cinematic-glow {
@@ -4934,6 +5077,21 @@ label {
 
   .watch-layout.theater-mode .watch-left {
     display: block;
+  }
+
+  .watch-layout.theater-mode .watch-player-area {
+    height: auto;
+    display: block;
+  }
+
+  .watch-layout.theater-mode .player-frame {
+    height: auto;
+    display: block;
+  }
+
+  .watch-layout.theater-mode .player-shell {
+    width: 100%;
+    height: auto;
   }
 
   .theater-control {

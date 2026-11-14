@@ -4,8 +4,6 @@ import { defineConfig, type Connect, type Plugin } from 'vite';
 function getServerConfig() {
   const serverUrl =
     process.env.SERVER_URL ||
-    process.env.MEDIA_SERVER_URL ||
-    process.env.JELLYFIN_URL ||
     'http://localhost:8096';
   const serverType = process.env.SERVER_TYPE || 'auto';
 
