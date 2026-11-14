@@ -2437,7 +2437,7 @@ label {
   position: absolute;
   left: 50%;
   top: 50%;
-  z-index: 9;
+  z-index: 11;
   width: 74px;
   height: 74px;
   display: grid;
@@ -2492,14 +2492,15 @@ label {
 
 .paused-player-overlay {
   position: absolute;
-  left: 14px;
-  right: 14px;
+  left: 50%;
+  width: min(920px, calc(100% - 28px));
   bottom: 86px;
   z-index: 10;
-  max-height: min(48%, 320px);
+  max-height: min(68%, 680px);
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
-  overflow: auto;
+  overflow: hidden;
   padding: 12px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 12px;
@@ -2508,10 +2509,59 @@ label {
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.38);
   backdrop-filter: blur(14px);
   pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.paused-player-overlay.no-background {
+  border-color: transparent;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.paused-player-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.paused-player-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.paused-player-tab {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.72);
+  background: transparent;
+  pointer-events: auto;
+}
+
+.paused-player-tab.active {
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.paused-player-tab:hover,
+.paused-player-tab:focus-visible {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .paused-player-recommendations {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .paused-player-recommendations h2 {
@@ -2520,13 +2570,17 @@ label {
 }
 
 .paused-player-items {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
   gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 5px;
+  overscroll-behavior-x: contain;
 }
 
 .paused-player-item {
   min-width: 0;
+  flex: 0 0 var(--paused-related-item-width, 210px);
   display: grid;
   align-content: start;
   gap: 5px;
@@ -2569,6 +2623,12 @@ label {
   min-width: 0;
   margin: 0;
   pointer-events: auto;
+}
+
+.paused-player-cast {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .paused-player-overlay :global(.cast-heading) {
@@ -4152,10 +4212,46 @@ label {
   font-weight: 700;
 }
 
+.tv-autoplay-panel {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 0;
+}
+
 .autoplay-next input {
   width: 16px;
   height: 16px;
   accent-color: var(--brand);
+}
+
+.history-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-tabs button {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  font-weight: 700;
+}
+
+.history-tabs button.active {
+  border-bottom-color: var(--brand);
+  color: var(--text);
+}
+
+.history-tabs button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.history-music-list {
+  max-width: 1100px;
 }
 
 .queue-complete {
@@ -4232,6 +4328,10 @@ label {
 
 @media (max-width: 1016px) {
   .watch-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .recommendation-rail.episode-watch-rail {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -4855,11 +4955,23 @@ label {
   top: 78px;
   z-index: 15;
   align-self: start;
+  height: calc(100dvh - 98px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .recommendation-rail {
   grid-column: 2;
   grid-row: 1;
+}
+
+.watch-layout:not(.minimized):not(.theater-mode) .recommendation-rail {
+  position: sticky;
+  top: 78px;
+  height: calc(100dvh - 98px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  align-self: start;
 }
 
 .watch-layout.theater-mode {
@@ -4880,6 +4992,9 @@ label {
   grid-column: 1 / -1;
   grid-row: 1;
   align-self: start;
+  height: calc(100dvh - 94px);
+  display: grid;
+  align-items: center;
 }
 
 .watch-layout.theater-mode .watch-main {
@@ -4894,8 +5009,17 @@ label {
 }
 
 .watch-layout.theater-mode .player-shell {
-  height: auto;
+  width: auto;
+  height: 100%;
+  max-width: 100%;
   padding-top: 0;
+}
+
+.watch-layout.theater-mode .player-frame {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  justify-items: center;
 }
 
 .watch-layout.theater-mode .player-frame.cinematic .cinematic-glow {
@@ -4903,6 +5027,13 @@ label {
 }
 
 @media (max-width: 1016px) {
+  .watch-layout:not(.minimized) .watch-left,
+  .watch-layout:not(.minimized) .recommendation-rail {
+    position: static;
+    height: auto;
+    overflow: visible;
+  }
+
   .watch-left,
   .watch-main,
   .recommendation-rail,
@@ -4915,6 +5046,21 @@ label {
 
   .watch-layout.theater-mode .watch-left {
     display: block;
+  }
+
+  .watch-layout.theater-mode .watch-player-area {
+    height: auto;
+    display: block;
+  }
+
+  .watch-layout.theater-mode .player-frame {
+    height: auto;
+    display: block;
+  }
+
+  .watch-layout.theater-mode .player-shell {
+    width: 100%;
+    height: auto;
   }
 
   .theater-control {

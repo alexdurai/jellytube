@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { Monitor, Play, X } from 'lucide-svelte';
+  import { Monitor, Pause, Play, X } from 'lucide-svelte';
   import type { PlayerPreferences, PreferredVideoResolution } from '../lib/playerPreferences';
 
   export let preferences: PlayerPreferences;
@@ -10,7 +10,7 @@
     close: void;
   }>();
 
-  let activeTab: 'playback' | 'player' = 'playback';
+  let activeTab: 'playback' | 'player' | 'paused' = 'playback';
 
   function update<K extends keyof PlayerPreferences>(key: K, value: PlayerPreferences[K]) {
     dispatch('change', { ...preferences, [key]: value });
@@ -27,7 +27,10 @@
   function handleTabKeydown(event: KeyboardEvent) {
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
     event.preventDefault();
-    activeTab = activeTab === 'playback' ? 'player' : 'playback';
+    const tabs = ['playback', 'player', 'paused'] as const;
+    const currentIndex = tabs.indexOf(activeTab);
+    const direction = event.key === 'ArrowDown' ? 1 : -1;
+    activeTab = tabs[(currentIndex + direction + tabs.length) % tabs.length];
     document.getElementById(`player-options-tab-${activeTab}`)?.focus();
   }
 </script>
@@ -53,7 +56,7 @@
     <header class="player-options-header">
       <div>
         <h2 id="player-options-title">Options</h2>
-        <p>Customize video playback and player display.</p>
+        <p>Customize playback, player display, and the paused screen.</p>
       </div>
       <button class="player-options-close" aria-label="Close options" on:click={() => dispatch('close')}>
         <X size={20} />
@@ -90,6 +93,17 @@
         >
           <Monitor size={18} />
           <span>Player display</span>
+        </button>
+        <button
+          id="player-options-tab-paused"
+          class:active={activeTab === 'paused'}
+          role="tab"
+          aria-selected={activeTab === 'paused'}
+          aria-controls="player-options-panel-paused"
+          on:click={() => (activeTab = 'paused')}
+        >
+          <Pause size={18} />
+          <span>Paused screen</span>
         </button>
       </div>
 
@@ -134,7 +148,7 @@
             />
           </label>
         </div>
-      {:else}
+      {:else if activeTab === 'player'}
         <div
           class="player-options-panel"
           id="player-options-panel-player"
@@ -177,8 +191,39 @@
           </label>
           <label class="player-option-row">
             <span>
-              <strong>Show recommendations while paused</strong>
-              <small>Show up to four related movies or episodes in the player.</small>
+              <strong>Show playback method and resolution</strong>
+              <small>Show Direct Play, Direct Stream, or Transcoding and the video resolution.</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={preferences.showPlaybackInfo}
+              on:change={(event) => update('showPlaybackInfo', (event.currentTarget as HTMLInputElement).checked)}
+            />
+          </label>
+          <label class="player-option-row">
+            <span>
+              <strong>Picture-in-picture on window blur</strong>
+              <small>Enter picture-in-picture while video is playing when this window loses focus.</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={preferences.autoPictureInPictureOnBlur}
+              on:change={(event) => update('autoPictureInPictureOnBlur', (event.currentTarget as HTMLInputElement).checked)}
+            />
+          </label>
+        </div>
+      {:else}
+        <div
+          class="player-options-panel"
+          id="player-options-panel-paused"
+          role="tabpanel"
+          aria-labelledby="player-options-tab-paused"
+        >
+          <h3>Paused screen</h3>
+          <label class="player-option-row">
+            <span>
+              <strong>Show related items while paused</strong>
+              <small>Show related movies, episodes, or music videos in the paused player.</small>
             </span>
             <input
               type="checkbox"
@@ -189,7 +234,7 @@
           <label class="player-option-row">
             <span>
               <strong>Show cast while paused</strong>
-              <small>Show cast members in the paused player when available.</small>
+              <small>Show cast members in a separate row when available.</small>
             </span>
             <input
               type="checkbox"
@@ -199,13 +244,42 @@
           </label>
           <label class="player-option-row">
             <span>
-              <strong>Show playback method and resolution</strong>
-              <small>Show Direct Play, Direct Stream, or Transcoding and the video resolution.</small>
+              <strong>Show paused panel background</strong>
+              <small>Show the translucent background behind paused content.</small>
             </span>
             <input
               type="checkbox"
-              checked={preferences.showPlaybackInfo}
-              on:change={(event) => update('showPlaybackInfo', (event.currentTarget as HTMLInputElement).checked)}
+              checked={preferences.showPausedOverlayBackground}
+              on:change={(event) => update('showPausedOverlayBackground', (event.currentTarget as HTMLInputElement).checked)}
+            />
+          </label>
+          <label class="player-option-row">
+            <span>
+              <strong>Related items shown</strong>
+              <small>Choose how many items the paused related row contains.</small>
+            </span>
+            <select
+              value={preferences.pausedRelatedItemCount}
+              on:change={(event) => update('pausedRelatedItemCount', Number((event.currentTarget as HTMLSelectElement).value))}
+            >
+              {#each [2, 3, 4, 5, 6, 7, 8] as count}
+                <option value={count}>{count}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="player-option-row">
+            <span>
+              <strong>Related thumbnail size</strong>
+              <small>Resize the thumbnails in the paused related row.</small>
+            </span>
+            <input
+              type="range"
+              min="120"
+              max="320"
+              step="20"
+              value={preferences.pausedRelatedItemWidth}
+              on:input={(event) => update('pausedRelatedItemWidth', Number((event.currentTarget as HTMLInputElement).value))}
+              aria-label="Related thumbnail size"
             />
           </label>
         </div>

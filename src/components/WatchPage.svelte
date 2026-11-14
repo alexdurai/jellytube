@@ -14,6 +14,7 @@
     Maximize,
     Minimize,
     Pause,
+    PictureInPicture2,
     Play,
     Ratio,
     Repeat,
@@ -21,11 +22,13 @@
     RotateCw,
     RectangleHorizontal,
     Settings,
+    SlidersHorizontal,
     SkipBack,
     SkipForward,
     Sparkles,
     Star,
     TriangleAlert,
+    Users,
     Volume2,
     VolumeX,
     X
@@ -153,6 +156,7 @@
     finished: JellyfinItem;
     restore: void;
     close: void;
+    options: void;
   }>();
 
   type PlaybackAttempt = {
@@ -243,6 +247,8 @@
   let playerShell: WebKitFullscreenElement;
   let playerFrame: HTMLElement;
   let watchLayout: HTMLElement;
+  let pictureInPictureActive = false;
+  const pictureInPictureSupported = typeof document !== 'undefined' && document.pictureInPictureEnabled;
 
   // FLIP bookkeeping for the minimize/restore animation. The snapshot is
   // captured in beforeUpdate (the DOM still shows the pre-toggle layout) and
@@ -288,6 +294,7 @@
   let autoPreferDirectPlay = true;
   let qualityMenuOpen = false;
   let infoPanelOpen = false;
+  let pausedOverlayTab: 'related' | 'cast' = 'related';
   let totalVideoFrames = 0;
   let droppedVideoFrames = 0;
   let estimatedBandwidth = 0;
@@ -496,7 +503,7 @@
           episode.Type === 'Episode' &&
           (!detailedItem.SeriesId || episode.SeriesId === detailedItem.SeriesId)
         )
-        .slice(0, 4)
+        .slice(0, playerPreferences.pausedRelatedItemCount)
     : isMovie
       ? (() => {
           const collectionItems = movieCollections.flatMap((group) => group.items);
@@ -508,17 +515,28 @@
               candidate.Id !== detailedItem.Id &&
               candidates.findIndex((other) => other.Id === candidate.Id) === index
             )
-            .slice(0, 4);
+            .slice(0, playerPreferences.pausedRelatedItemCount);
         })()
+      : isMusicVideo
+        ? recommendations
+            .map(recommendationPlayableItem)
+            .filter((candidate): candidate is JellyfinItem => candidate?.Type === 'MusicVideo' || candidate?.contentKind === 'musicVideo')
+            .slice(0, playerPreferences.pausedRelatedItemCount)
       : [];
+  $: showPausedRelatedTab = playerPreferences.showPausedRecommendations && pausedRelatedItems.length > 0;
+  $: showPausedCastTab = playerPreferences.showPausedCast && pausedCast.length > 0;
+  $: visiblePausedOverlayTab = pausedOverlayTab === 'cast' && showPausedCastTab
+    ? 'cast'
+    : showPausedRelatedTab
+      ? 'related'
+      : 'cast';
   $: showPausedOverlay = !minimized &&
     started &&
     !isPlaying &&
     !loading &&
     !buffering &&
     !error &&
-    ((playerPreferences.showPausedRecommendations && pausedRelatedItems.length > 0) ||
-      (playerPreferences.showPausedCast && pausedCast.length > 0));
+    (showPausedRelatedTab || showPausedCastTab);
   $: contextLabel = isMovie ? detailedItem.sourceLibraryName || 'YouTube Movies' : channelName(detailedItem);
 
   // TV shows keep their cast on the series item; an episode's People hold only
@@ -659,6 +677,8 @@
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     video?.addEventListener('webkitbeginfullscreen', handleFullscreenChange);
     video?.addEventListener('webkitendfullscreen', handleFullscreenChange);
+    video?.addEventListener('enterpictureinpicture', syncPictureInPictureState);
+    video?.addEventListener('leavepictureinpicture', syncPictureInPictureState);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('resize', syncMonitorAspectRatio);
     window.screen.orientation?.addEventListener('change', syncMonitorAspectRatio);
@@ -667,6 +687,8 @@
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
       video?.removeEventListener('webkitbeginfullscreen', handleFullscreenChange);
       video?.removeEventListener('webkitendfullscreen', handleFullscreenChange);
+      video?.removeEventListener('enterpictureinpicture', syncPictureInPictureState);
+      video?.removeEventListener('leavepictureinpicture', syncPictureInPictureState);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('resize', syncMonitorAspectRatio);
       window.screen.orientation?.removeEventListener('change', syncMonitorAspectRatio);
@@ -1689,6 +1711,7 @@
 
   function handlePlay() {
     isPlaying = true;
+    pausedOverlayTab = 'related';
     playRequested = true;
     clearBuffering();
     if (fallbackNotice.startsWith('Autoplay was blocked')) fallbackNotice = '';
@@ -2428,6 +2451,43 @@
       : 'Fullscreen is not supported in this browser.';
   }
 
+  async function togglePictureInPicture() {
+    if (!pictureInPictureSupported || !video) return;
+
+    try {
+      if (document.pictureInPictureElement === video) {
+        await document.exitPictureInPicture();
+      } else {
+        await video.requestPictureInPicture();
+      }
+    } catch {
+      // The browser may reject PiP when playback or focus state does not allow it.
+    }
+  }
+
+  function syncPictureInPictureState() {
+    pictureInPictureActive = document.pictureInPictureElement === video;
+  }
+
+  async function enterPictureInPictureOnBlur() {
+    if (
+      !playerPreferences.autoPictureInPictureOnBlur ||
+      !pictureInPictureSupported ||
+      !video ||
+      video.paused ||
+      video.ended ||
+      document.pictureInPictureElement === video
+    ) {
+      return;
+    }
+
+    try {
+      await video.requestPictureInPicture();
+    } catch {
+      // Auto PiP can be denied by browser focus or user-activation policies.
+    }
+  }
+
   function handleFullscreenChange() {
     const doc = document as WebKitDocument;
     fullscreen = Boolean(document.fullscreenElement || doc.webkitFullscreenElement || video?.webkitDisplayingFullscreen);
@@ -2727,6 +2787,7 @@
 </script>
 
 <svelte:window
+  on:blur={enterPictureInPictureOnBlur}
   on:pointermove={resizeMiniPlayer}
   on:pointerup={finishMiniPlayerResize}
   on:pointercancel={finishMiniPlayerResize}
@@ -2938,11 +2999,43 @@
           {/if}
 
           {#if showPausedOverlay}
-            <div class="paused-player-overlay">
-              {#if playerPreferences.showPausedRecommendations && pausedRelatedItems.length}
-                <section class="paused-player-recommendations" aria-label={isEpisode ? 'More episodes' : 'Related movies'}>
-                  <h2>{isEpisode ? 'More episodes' : 'Related movies'}</h2>
-                  <div class="paused-player-items">
+            <div class="paused-player-overlay" class:no-background={!playerPreferences.showPausedOverlayBackground}>
+              <div class="paused-player-toolbar">
+                <div class="paused-player-tabs" role="tablist" aria-label="Paused content">
+                  {#if showPausedRelatedTab}
+                    <button
+                      class:active={visiblePausedOverlayTab === 'related'}
+                      class="paused-player-tab"
+                      type="button"
+                      role="tab"
+                      aria-selected={visiblePausedOverlayTab === 'related'}
+                      on:click|stopPropagation={() => (pausedOverlayTab = 'related')}
+                    >
+                      Related
+                    </button>
+                  {/if}
+                  {#if showPausedCastTab}
+                    <button
+                      class:active={visiblePausedOverlayTab === 'cast'}
+                      class="paused-player-tab"
+                      type="button"
+                      role="tab"
+                      aria-selected={visiblePausedOverlayTab === 'cast'}
+                      on:click|stopPropagation={() => (pausedOverlayTab = 'cast')}
+                    >
+                      <Users size={15} />
+                      Cast
+                    </button>
+                  {/if}
+                </div>
+              </div>
+              {#if visiblePausedOverlayTab === 'related' && showPausedRelatedTab}
+                <div class="paused-player-recommendations" role="tabpanel" tabindex="0" aria-label={isEpisode ? 'More episodes' : isMusicVideo ? 'More music videos' : 'Related movies'}>
+                  <h2>{isEpisode ? 'More episodes' : isMusicVideo ? `More videos by ${channelName(detailedItem)}` : 'Related movies'}</h2>
+                  <div
+                    class="paused-player-items"
+                    style={`--paused-related-item-count: ${playerPreferences.pausedRelatedItemCount}; --paused-related-item-width: ${playerPreferences.pausedRelatedItemWidth}px`}
+                  >
                     {#each pausedRelatedItems as relatedItem (relatedItem.Id)}
                       <button
                         class="paused-player-item"
@@ -2960,15 +3053,16 @@
                       </button>
                     {/each}
                   </div>
-                </section>
-              {/if}
-              {#if playerPreferences.showPausedCast && pausedCast.length}
-                <ActorCast
-                  {client}
-                  actors={pausedCast.slice(0, 4)}
-                  heading="Cast"
-                  on:select={(event) => dispatch('actor', event.detail.actor)}
-                />
+                </div>
+              {:else if visiblePausedOverlayTab === 'cast' && showPausedCastTab}
+                <div class="paused-player-cast" role="tabpanel" tabindex="0" aria-label="Cast">
+                  <ActorCast
+                    {client}
+                    actors={pausedCast}
+                    heading="Cast"
+                    on:select={(event) => dispatch('actor', event.detail.actor)}
+                  />
+                </div>
               {/if}
             </div>
           {/if}
@@ -3342,6 +3436,18 @@
                 >
                   <RectangleHorizontal size={21} />
                 </button>
+                {#if pictureInPictureSupported}
+                  <button
+                    class="player-control picture-in-picture-control"
+                    class:active={pictureInPictureActive}
+                    aria-label={pictureInPictureActive ? 'Exit picture-in-picture' : 'Enter picture-in-picture'}
+                    aria-pressed={pictureInPictureActive}
+                    title={pictureInPictureActive ? 'Exit picture-in-picture' : 'Picture-in-picture'}
+                    on:click={() => void togglePictureInPicture()}
+                  >
+                    <PictureInPicture2 size={21} />
+                  </button>
+                {/if}
                 <div class="player-info-control">
                   <button
                     class="player-control info-button"
@@ -3379,6 +3485,21 @@
                   {#if qualityMenuOpen}
                     <div class="quality-menu settings-menu" role="menu" aria-label="Settings">
                       <div class="quality-menu-heading">Settings</div>
+                      <button
+                        class="quality-option player-options-menu-button"
+                        role="menuitem"
+                        on:click={() => {
+                          qualityMenuOpen = false;
+                          dispatch('options');
+                        }}
+                      >
+                        <span>
+                          <strong>Player options</strong>
+                          <small>Playback and display preferences</small>
+                        </span>
+                        <SlidersHorizontal size={17} />
+                      </button>
+                      <div class="settings-menu-divider"></div>
                       <button
                         class="settings-option ambient-mode-option"
                         class:active={cinematicMode}
@@ -3552,10 +3673,6 @@
             <span>{queueIndex >= 0 ? `Episode ${queueIndex + 1} of ${queue.length}` : 'Episodes'}</span>
           </div>
           <div class="episode-shelf-actions">
-            <label class="autoplay-next">
-              <input type="checkbox" checked={autoplayNext} on:change={toggleAutoplayNext} />
-              <span>Autoplay</span>
-            </label>
             <label class="season-picker">
               <span>Season</span>
               <select value={selectedEpisodeSeason} on:change={changeEpisodeSeason}>
@@ -3629,7 +3746,20 @@
   </div>
   </div>
 
-  <aside class="recommendation-rail" aria-label={isMovie ? 'Recommended movies' : 'Recommended videos'}>
+  <aside
+    class="recommendation-rail"
+    class:episode-watch-rail={hasEpisodeShelf}
+    aria-label={isMovie ? 'Recommended movies' : 'Recommended videos'}
+  >
+    {#if hasEpisodeShelf}
+      <section class="tv-autoplay-panel" aria-label="Episode autoplay">
+        <label class="autoplay-next">
+          <input type="checkbox" checked={autoplayNext} on:change={toggleAutoplayNext} />
+          <span>Autoplay</span>
+        </label>
+      </section>
+    {/if}
+
     {#if nextUpItem}
       <section class="next-up-panel" aria-label={`Next up for ${channelName(nextUpItem)}`}>
         <div class="next-up-heading">
@@ -3721,7 +3851,7 @@
       {#if recommendations.length}
         <section class="recommendation-panel" aria-label="Recommended videos">
           <div class="recommendation-heading">
-            <h2>Recommended</h2>
+            <h2>{isMusicVideo ? `More by ${channelName(detailedItem)}` : 'Recommended'}</h2>
             {#if showRecommendationAutoplayToggle}
               <label class="autoplay-next">
                 <input type="checkbox" checked={autoplayNext} on:change={toggleAutoplayNext} />

@@ -8,6 +8,10 @@ export type PlayerPreferences = {
   showPlaybackInfo: boolean;
   showPausedRecommendations: boolean;
   showPausedCast: boolean;
+  showPausedOverlayBackground: boolean;
+  pausedRelatedItemCount: number;
+  pausedRelatedItemWidth: number;
+  autoPictureInPictureOnBlur: boolean;
   preferredVideoResolution: PreferredVideoResolution;
 };
 
@@ -21,6 +25,10 @@ export const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
   showPlaybackInfo: true,
   showPausedRecommendations: true,
   showPausedCast: true,
+  showPausedOverlayBackground: true,
+  pausedRelatedItemCount: 4,
+  pausedRelatedItemWidth: 210,
+  autoPictureInPictureOnBlur: false,
   preferredVideoResolution: 'max'
 };
 
@@ -42,6 +50,11 @@ function isPreferredVideoResolution(value: unknown): value is PreferredVideoReso
   return typeof value === 'string' && preferredVideoResolutionSet.has(value);
 }
 
+function boundedIntegerPreference(value: unknown, fallback: number, min: number, max: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 export function parsePlayerPreferences(value: string | null | undefined): PlayerPreferences {
   if (!value) return { ...DEFAULT_PLAYER_PREFERENCES };
 
@@ -56,6 +69,11 @@ export function parsePlayerPreferences(value: string | null | undefined): Player
       showPlaybackInfo: stored.showPlaybackInfo !== false,
       showPausedRecommendations: stored.showPausedRecommendations !== false,
       showPausedCast: stored.showPausedCast !== false,
+      showPausedOverlayBackground:
+        stored.showPausedOverlayBackground !== false && stored.showPausedOverlayShadow !== false,
+      pausedRelatedItemCount: boundedIntegerPreference(stored.pausedRelatedItemCount, 4, 2, 8),
+      pausedRelatedItemWidth: boundedIntegerPreference(stored.pausedRelatedItemWidth, 210, 120, 320),
+      autoPictureInPictureOnBlur: stored.autoPictureInPictureOnBlur === true,
       preferredVideoResolution: isPreferredVideoResolution(stored.preferredVideoResolution)
         ? stored.preferredVideoResolution
         : 'max'

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte';
-  import { ArrowLeft, Clock, Disc3, ListMusic, Music2, Play, Shuffle } from 'lucide-svelte';
+  import { ArrowLeft, Clock, Disc3, ListMusic, Music2, Pause, Play, Shuffle } from 'lucide-svelte';
   import type { JellyfinClient } from '../../lib/jellyfin';
   import type { SelectedLibrary, JellyfinItem } from '../../lib/types';
   import { musicPlayerState, playTracks, togglePlayPause } from '../../lib/music/store';
+  import { currentTrack } from '../../lib/music/queue';
   import { formatDuration } from '../../lib/recommendations';
   import { normalizeSearch } from '../../lib/search';
   import MusicAlbumCard from './MusicAlbumCard.svelte';
@@ -15,7 +16,10 @@
   // otherwise the album/artist being displayed. Passed down from the app router.
   export let item: { kind: 'album' | 'artist'; id: string } | null = null;
 
-  const dispatch = createEventDispatcher<{ navigate: { kind: 'album' | 'artist'; id: string } | null }>();
+  const dispatch = createEventDispatcher<{
+    navigate: { kind: 'album' | 'artist'; id: string } | null;
+    playbackStart: void;
+  }>();
 
   let error = '';
   let albums: JellyfinItem[] = [];
@@ -62,6 +66,9 @@
   $: musicQueue = $musicPlayerState.queue;
   $: musicCurrentId = $musicPlayerState.currentId;
   $: musicPlaying = $musicPlayerState.playing;
+  // Album of the track currently playing, so album cards can show a state-aware
+  // hover control (Pause instead of Play) for the album that is playing.
+  $: musicCurrentAlbumId = musicQueue ? currentTrack(musicQueue)?.AlbumId ?? null : null;
   $: albumDuration = albumTracks.reduce((sum, track) => sum + (track.RunTimeTicks || 0), 0);
 
   // Kick off each library section independently so the browser can paint the
@@ -285,17 +292,27 @@
 
   // ---- Playback ----
   function playTrackList(list: JellyfinItem[], startIndex: number) {
-    if (list.length) playTracks(list, startIndex, true);
+    if (!list.length) return;
+    dispatch('playbackStart');
+    playTracks(list, startIndex, true);
   }
 
-  async function playAlbum(album: JellyfinItem) {
-    try {
-      const response = await client.getAlbumTracks(album.Id);
-      const tracks = response.Items ?? [];
-      playTrackList(tracks, 0);
-    } catch {
-      error = 'Could not load this album.';
+  function playAlbum(album: JellyfinItem) {
+    // Clicking the hover control of the album that is already playing toggles
+    // pause/resume instead of restarting it from track 1.
+    if (album.Id === musicCurrentAlbumId) {
+      togglePlayPause();
+      return;
     }
+    void (async () => {
+      try {
+        const response = await client.getAlbumTracks(album.Id);
+        const tracks = response.Items ?? [];
+        playTrackList(tracks, 0);
+      } catch {
+        error = 'Could not load this album.';
+      }
+    })();
   }
 
   function playAlbumTracks(startIndex: number) {
@@ -389,8 +406,11 @@
         fetchArtistSongs(artist)
       ]);
       if (activeArtist?.Id !== artist.Id) return;
+      // Adopt the fetched detail as the hero item: it carries ImageTags (and
+      // Overview/Genres), which the grid item or album-link stub may lack —
+      // without them getImageUrl returns '' and the hero renders no picture.
+      activeArtist = detail ?? activeArtist;
       artistInfo = detail;
-      artistAlbums = albumItems;
       artistSongs = songsForArtist;
     } catch {
       artistAlbums = [];
@@ -741,6 +761,7 @@
       <div class="music-albums-grid">
         {#each artistAlbums as album (album.Id)}
           <MusicAlbumCard {client} {album}
+            playingNow={album.Id === musicCurrentAlbumId && musicPlaying}
             on:play={(event) => playAlbum(event.detail)}
             on:open={(event) => openAlbum(event.detail)}
             on:artist={(event) => openArtistFromAlbum(event.detail)}
@@ -823,6 +844,7 @@
         <div class="music-albums-grid">
           {#each genreAlbums as album (album.Id)}
             <MusicAlbumCard {client} {album}
+              playingNow={album.Id === musicCurrentAlbumId && musicPlaying}
               on:play={(event) => playAlbum(event.detail)}
               on:open={(event) => openAlbum(event.detail)}
               on:artist={(event) => openArtistFromAlbum(event.detail)}
@@ -846,6 +868,7 @@
       <div class="music-albums-grid">
         {#each albums as album (album.Id)}
           <MusicAlbumCard {client} {album}
+            playingNow={album.Id === musicCurrentAlbumId && musicPlaying}
             on:play={(event) => playAlbum(event.detail)}
             on:open={(event) => openAlbum(event.detail)}
             on:artist={(event) => openArtistFromAlbum(event.detail)}
@@ -877,6 +900,7 @@
         <div class="music-albums-grid">
           {#each recommended as album (album.Id)}
             <MusicAlbumCard {client} {album}
+              playingNow={album.Id === musicCurrentAlbumId && musicPlaying}
               on:play={(event) => playAlbum(event.detail)}
               on:open={(event) => openAlbum(event.detail)}
               on:artist={(event) => openArtistFromAlbum(event.detail)}
@@ -963,6 +987,7 @@
         <div class="music-albums-grid">
           {#each mostPlayed as album (album.Id)}
             <MusicAlbumCard {client} {album}
+              playingNow={album.Id === musicCurrentAlbumId && musicPlaying}
               on:play={(event) => playAlbum(event.detail)}
               on:open={(event) => openAlbum(event.detail)}
               on:artist={(event) => openArtistFromAlbum(event.detail)}
@@ -986,6 +1011,7 @@
         <div class="music-albums-grid">
           {#each favorites as album (album.Id)}
             <MusicAlbumCard {client} {album}
+              playingNow={album.Id === musicCurrentAlbumId && musicPlaying}
               on:play={(event) => playAlbum(event.detail)}
               on:open={(event) => openAlbum(event.detail)}
               on:artist={(event) => openArtistFromAlbum(event.detail)}

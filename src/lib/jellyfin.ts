@@ -124,7 +124,7 @@ export function annotateItems(items: JellyfinItem[], source: SelectedLibrary) {
 
 const itemFields = [
   'PrimaryImageAspectRatio',
-  'BackdropImageTags',
+  'ImageTags',
   'Overview',
   'DateCreated',
   'PremiereDate',
@@ -315,16 +315,40 @@ export class JellyfinClient {
 
   async getPlaybackHistory(limit = 200) {
     if (!this.userId) throw new JellyfinError('Missing media server user id');
+    if (limit <= 0) return [];
+    const itemTypes = ['Movie', 'Episode', 'Video', 'MusicVideo'];
+    const perTypeLimit = Math.ceil(limit / itemTypes.length);
+    const groups = await Promise.all(itemTypes.map(async (itemType) => {
+      const [played, resumable] = await Promise.all([
+        this.getHistoryItems(itemType, 'IsPlayed', perTypeLimit),
+        this.getHistoryItems(itemType, 'IsResumable', perTypeLimit)
+      ]);
+      return this.mergeHistoryItems([...played, ...resumable], perTypeLimit);
+    }));
+    return this.mergeHistoryItems(groups.flat(), limit);
+  }
+
+  async getListenHistory(limit = 200) {
+    if (!this.userId) throw new JellyfinError('Missing media server user id');
+    if (limit <= 0) return [];
+    const [played, resumable] = await Promise.all([
+      this.getHistoryItems('Audio', 'IsPlayed', limit),
+      this.getHistoryItems('Audio', 'IsResumable', limit)
+    ]);
+    return this.mergeHistoryItems([...played, ...resumable], limit);
+  }
+
+  private async getHistoryItems(itemTypes: string, filter: 'IsPlayed' | 'IsResumable', limit: number) {
     const pageSize = 100;
     const history: JellyfinItem[] = [];
 
     while (history.length < limit) {
       const pageLimit = Math.min(pageSize, limit - history.length);
       const response = await this.getItems({
-        itemTypes: 'Movie,Episode,Video,MusicVideo',
+        itemTypes,
         sortBy: 'DatePlayed',
         sortOrder: 'Descending',
-        filters: 'IsPlayed',
+        filters: filter,
         limit: pageLimit,
         startIndex: history.length
       });
@@ -335,6 +359,14 @@ export class JellyfinClient {
     }
 
     return history;
+  }
+
+  private mergeHistoryItems(items: JellyfinItem[], limit: number) {
+    const unique = new Map<string, JellyfinItem>();
+    for (const item of items) unique.set(item.Id, { ...unique.get(item.Id), ...item });
+    return [...unique.values()]
+      .sort((a, b) => Date.parse(b.UserData?.LastPlayedDate ?? '') - Date.parse(a.UserData?.LastPlayedDate ?? ''))
+      .slice(0, limit);
   }
 
   async getItemsWithMediaStreams(itemIds: string[]) {
@@ -773,7 +805,12 @@ export class JellyfinClient {
 
   getImageUrl(item: Pick<JellyfinItem, 'Id' | 'ImageTags'>, width = 640) {
     if (!item.ImageTags?.Primary) return '';
-    return this.url('/Items/' + item.Id + '/Images/Primary', {
+    return this.getPrimaryImageUrl(item.Id, width);
+  }
+
+  getPrimaryImageUrl(itemId: string, width = 640) {
+    if (!itemId) return '';
+    return this.url('/Items/' + itemId + '/Images/Primary', {
       fillWidth: String(width),
       quality: '90',
       ...this.authQueryParams()

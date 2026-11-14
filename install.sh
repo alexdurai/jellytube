@@ -10,7 +10,7 @@ readonly CONFIG_FILE="$CONFIG_ROOT/jellytube.env"
 readonly UNIT_FILE="/etc/systemd/system/$SERVICE_NAME"
 readonly INSTALL_LOCK="/run/lock/jellytube-install.lock"
 
-repository="${JELLYTUBE_REPOSITORY:-nilesjarvis/jellytube}"
+repository="${JELLYTUBE_REPOSITORY:-alexdurai/jellytube}"
 source_ref="${JELLYTUBE_REF:-main}"
 service_host="${JELLYTUBE_HOST:-0.0.0.0}"
 service_port="${JELLYTUBE_PORT:-4173}"
@@ -32,13 +32,13 @@ Install or upgrade JellyTube as a systemd service.
 
 Usage:
   sudo bash install.sh
-  curl -fsSL https://raw.githubusercontent.com/nilesjarvis/jellytube/main/install.sh | sudo bash
+  curl -fsSL https://raw.githubusercontent.com/alexdurai/jellytube/main/install.sh | sudo bash
 
 First-install settings:
   JELLYTUBE_HOST          Listening address (default: 0.0.0.0)
   JELLYTUBE_PORT          Listening port (default: 4173)
   JELLYTUBE_REF           Git tag, branch, or commit to install (default: main)
-  JELLYTUBE_REPOSITORY    GitHub owner/repository (default: nilesjarvis/jellytube)
+  JELLYTUBE_REPOSITORY    GitHub owner/repository (default: alexdurai/jellytube)
   JELLYTUBE_NODE_MAJOR    Private Node.js runtime major (default: 22)
 
 Existing /etc/jellytube/jellytube.env settings are preserved during upgrades.

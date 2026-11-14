@@ -1,35 +1,70 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
-  import { Play } from 'lucide-svelte';
+  import { Pause, Play } from 'lucide-svelte';
   import type { JellyfinClient } from '../../lib/jellyfin';
   import { displayTitle } from '../../lib/recommendations';
   import type { JellyfinItem } from '../../lib/types';
 
   export let client: JellyfinClient;
   export let album: JellyfinItem;
+  // True while this album is the one playing: the hover control shows Pause
+  // and toggles playback instead of restarting the album.
+  export let playingNow = false;
 
   // play = play the album, open = go to the album page, artist = go to the artist
   const dispatch = createEventDispatcher<{ play: JellyfinItem; open: JellyfinItem; artist: JellyfinItem }>();
+  let imageFailed = false;
+  let imageFallbackAttempted = false;
+  let imageFallbackUrl = '';
 
   $: artist = album.AlbumArtist || album.Artists?.join(', ') || '';
-  $: imageUrl = client.getImageUrl(album, 360);
+  $: imageUrl = imageFallbackUrl || client.getImageUrl(album, 360) || client.getPrimaryImageUrl(album.Id, 360);
   $: title = displayTitle(album);
   $: hasArtist = artist.length > 0;
+
+  async function handleImageError() {
+    if (imageFallbackAttempted) {
+      imageFailed = true;
+      return;
+    }
+
+    imageFallbackAttempted = true;
+    try {
+      const tracks = (await client.getAlbumTracks(album.Id)).Items ?? [];
+      const track = tracks.find((candidate) => candidate.ImageTags?.Primary) ?? tracks[0];
+      imageFallbackUrl = track
+        ? client.getImageUrl(track, 360) || client.getPrimaryImageUrl(track.Id, 360)
+        : '';
+      if (!imageFallbackUrl) imageFailed = true;
+    } catch {
+      imageFailed = true;
+    }
+  }
 </script>
 
 <div class="music-album-card">
   <span class="music-album-art-wrap">
     <button class="music-album-art-btn" aria-label={"Open album " + title} on:click={() => dispatch('open', album)}>
       <span class="music-album-art">
-        {#if imageUrl}
-          <img src={imageUrl} alt="" loading="lazy" />
+        {#if imageUrl && !imageFailed}
+          <img src={imageUrl} alt="" loading="lazy" on:error={handleImageError} />
         {:else}
           <span class="music-art-fallback">{title.slice(0, 1)}</span>
         {/if}
       </span>
     </button>
-    <button class="music-album-play" aria-label={"Play album " + title} title={"Play " + title} on:click={() => dispatch('play', album)}>
-      <Play size={18} fill="currentColor" aria-hidden="true" />
+    <button
+      class="music-album-play"
+      class:active={playingNow}
+      aria-label={(playingNow ? 'Pause album ' : 'Play album ') + title}
+      title={(playingNow ? 'Pause ' : 'Play ') + title}
+      on:click={() => dispatch('play', album)}
+    >
+      {#if playingNow}
+        <Pause size={18} fill="currentColor" aria-hidden="true" />
+      {:else}
+        <Play size={18} fill="currentColor" aria-hidden="true" />
+      {/if}
     </button>
   </span>
 
@@ -117,6 +152,10 @@
     transform: translateY(0);
   }
   .music-album-play:hover {
+    background: var(--brand);
+  }
+  /* Playing album: the hover control stays visible as a Pause button. */
+  .music-album-play.active {
     background: var(--brand);
   }
   .music-album-title,
