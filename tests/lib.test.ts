@@ -837,6 +837,8 @@ test('player preferences safely load defaults and preserve valid options', () =>
       alwaysStretchToFill: true,
       showVideoEndTime: true,
       showPausedOverlayBackground: false,
+      pausedRelatedItemCount: 8,
+      pausedRelatedItemWidth: 300,
       autoPictureInPictureOnBlur: true,
       preferredVideoResolution: '1080'
     })),
@@ -845,11 +847,15 @@ test('player preferences safely load defaults and preserve valid options', () =>
       alwaysStretchToFill: true,
       showVideoEndTime: true,
       showPausedOverlayBackground: false,
+      pausedRelatedItemCount: 8,
+      pausedRelatedItemWidth: 300,
       autoPictureInPictureOnBlur: true,
       preferredVideoResolution: '1080'
     }
   );
   assert.equal(parsePlayerPreferences('{"showPausedOverlayShadow":false}').showPausedOverlayBackground, false);
+  assert.equal(parsePlayerPreferences('{"pausedRelatedItemCount":1}').pausedRelatedItemCount, 2);
+  assert.equal(parsePlayerPreferences('{"pausedRelatedItemWidth":999}').pausedRelatedItemWidth, 320);
 });
 
 test('player aspect mode migrates the former ultrawide crop preference', () => {

@@ -8,7 +8,6 @@
     ChevronLeft,
     ChevronRight,
     Download,
-    Grid2x2,
     Info,
     Loader2,
     Languages,
@@ -22,7 +21,6 @@
     RotateCcw,
     RotateCw,
     RectangleHorizontal,
-    Rows3,
     Settings,
     SlidersHorizontal,
     SkipBack,
@@ -297,7 +295,6 @@
   let qualityMenuOpen = false;
   let infoPanelOpen = false;
   let pausedOverlayTab: 'related' | 'cast' = 'related';
-  let pausedRelatedLayout: 'grid' | 'list' = 'grid';
   let totalVideoFrames = 0;
   let droppedVideoFrames = 0;
   let estimatedBandwidth = 0;
@@ -506,7 +503,7 @@
           episode.Type === 'Episode' &&
           (!detailedItem.SeriesId || episode.SeriesId === detailedItem.SeriesId)
         )
-        .slice(0, 4)
+        .slice(0, playerPreferences.pausedRelatedItemCount)
     : isMovie
       ? (() => {
           const collectionItems = movieCollections.flatMap((group) => group.items);
@@ -518,13 +515,13 @@
               candidate.Id !== detailedItem.Id &&
               candidates.findIndex((other) => other.Id === candidate.Id) === index
             )
-            .slice(0, 4);
+            .slice(0, playerPreferences.pausedRelatedItemCount);
         })()
       : isMusicVideo
         ? recommendations
             .map(recommendationPlayableItem)
             .filter((candidate): candidate is JellyfinItem => candidate?.Type === 'MusicVideo' || candidate?.contentKind === 'musicVideo')
-            .slice(0, 4)
+            .slice(0, playerPreferences.pausedRelatedItemCount)
       : [];
   $: showPausedRelatedTab = playerPreferences.showPausedRecommendations && pausedRelatedItems.length > 0;
   $: showPausedCastTab = playerPreferences.showPausedCast && pausedCast.length > 0;
@@ -1715,7 +1712,6 @@
   function handlePlay() {
     isPlaying = true;
     pausedOverlayTab = 'related';
-    pausedRelatedLayout = 'grid';
     playRequested = true;
     clearBuffering();
     if (fallbackNotice.startsWith('Autoplay was blocked')) fallbackNotice = '';
@@ -3032,35 +3028,14 @@
                     </button>
                   {/if}
                 </div>
-                {#if visiblePausedOverlayTab === 'related' && showPausedRelatedTab}
-                  <div class="paused-player-layout-toggle" role="group" aria-label="Related content layout">
-                    <button
-                      class:active={pausedRelatedLayout === 'grid'}
-                      type="button"
-                      aria-label="Show related content as a grid"
-                      aria-pressed={pausedRelatedLayout === 'grid'}
-                      title="Grid"
-                      on:click|stopPropagation={() => (pausedRelatedLayout = 'grid')}
-                    >
-                      <Grid2x2 size={17} />
-                    </button>
-                    <button
-                      class:active={pausedRelatedLayout === 'list'}
-                      type="button"
-                      aria-label="Show related content as a list"
-                      aria-pressed={pausedRelatedLayout === 'list'}
-                      title="List"
-                      on:click|stopPropagation={() => (pausedRelatedLayout = 'list')}
-                    >
-                      <Rows3 size={17} />
-                    </button>
-                  </div>
-                {/if}
               </div>
               {#if visiblePausedOverlayTab === 'related' && showPausedRelatedTab}
                 <div class="paused-player-recommendations" role="tabpanel" tabindex="0" aria-label={isEpisode ? 'More episodes' : isMusicVideo ? 'More music videos' : 'Related movies'}>
                   <h2>{isEpisode ? 'More episodes' : isMusicVideo ? `More videos by ${channelName(detailedItem)}` : 'Related movies'}</h2>
-                  <div class="paused-player-items" class:grid={pausedRelatedLayout === 'grid'} class:list={pausedRelatedLayout === 'list'}>
+                  <div
+                    class="paused-player-items"
+                    style={`--paused-related-item-count: ${playerPreferences.pausedRelatedItemCount}; --paused-related-item-width: ${playerPreferences.pausedRelatedItemWidth}px`}
+                  >
                     {#each pausedRelatedItems as relatedItem (relatedItem.Id)}
                       <button
                         class="paused-player-item"
@@ -3771,7 +3746,20 @@
   </div>
   </div>
 
-  <aside class="recommendation-rail" aria-label={isMovie ? 'Recommended movies' : 'Recommended videos'}>
+  <aside
+    class="recommendation-rail"
+    class:episode-watch-rail={hasEpisodeShelf}
+    aria-label={isMovie ? 'Recommended movies' : 'Recommended videos'}
+  >
+    {#if hasEpisodeShelf}
+      <section class="tv-autoplay-panel" aria-label="Episode autoplay">
+        <label class="autoplay-next">
+          <input type="checkbox" checked={autoplayNext} on:change={toggleAutoplayNext} />
+          <span>Autoplay</span>
+        </label>
+      </section>
+    {/if}
+
     {#if nextUpItem}
       <section class="next-up-panel" aria-label={`Next up for ${channelName(nextUpItem)}`}>
         <div class="next-up-heading">
@@ -3779,17 +3767,9 @@
             <span>Next Up</span>
             <h2>{channelName(nextUpItem)}</h2>
           </div>
-          <div class="next-up-heading-actions">
-            {#if hasEpisodeShelf}
-              <label class="autoplay-next">
-                <input type="checkbox" checked={autoplayNext} on:change={toggleAutoplayNext} />
-                <span>Autoplay</span>
-              </label>
-            {/if}
-            {#if episodeCode(nextUpItem)}
-              <strong>{episodeCode(nextUpItem)}</strong>
-            {/if}
-          </div>
+          {#if episodeCode(nextUpItem)}
+            <strong>{episodeCode(nextUpItem)}</strong>
+          {/if}
         </div>
         <VideoCard
           {client}
@@ -3830,15 +3810,6 @@
         {:else}
           <div class="queue-complete">End of mix</div>
         {/if}
-      </section>
-    {/if}
-
-    {#if hasEpisodeShelf && !nextUpItem}
-      <section class="tv-autoplay-panel" aria-label="Episode autoplay">
-        <label class="autoplay-next">
-          <input type="checkbox" checked={autoplayNext} on:change={toggleAutoplayNext} />
-          <span>Autoplay</span>
-        </label>
       </section>
     {/if}
 

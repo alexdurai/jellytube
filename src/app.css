@@ -2526,15 +2526,13 @@ label {
   gap: 12px;
 }
 
-.paused-player-tabs,
-.paused-player-layout-toggle {
+.paused-player-tabs {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.paused-player-tab,
-.paused-player-layout-toggle button {
+.paused-player-tab {
   min-height: 34px;
   display: inline-flex;
   align-items: center;
@@ -2548,17 +2546,14 @@ label {
   pointer-events: auto;
 }
 
-.paused-player-tab.active,
-.paused-player-layout-toggle button.active {
+.paused-player-tab.active {
   border-color: rgba(255, 255, 255, 0.18);
   color: #fff;
   background: rgba(255, 255, 255, 0.12);
 }
 
 .paused-player-tab:hover,
-.paused-player-layout-toggle button:hover,
-.paused-player-tab:focus-visible,
-.paused-player-layout-toggle button:focus-visible {
+.paused-player-tab:focus-visible {
   color: #fff;
   background: rgba(255, 255, 255, 0.16);
 }
@@ -2575,38 +2570,17 @@ label {
 }
 
 .paused-player-items {
-  max-height: min(52vh, 480px);
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
   gap: 8px;
-  overflow: auto;
-}
-
-.paused-player-items.list {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-}
-
-.paused-player-items.list .paused-player-item {
-  grid-template-columns: minmax(96px, 150px) minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-}
-
-.paused-player-items.list .paused-player-item-image {
-  width: 100%;
-  aspect-ratio: 16 / 9;
-}
-
-.paused-player-items.list .paused-player-item > strong {
-  display: -webkit-box;
-  white-space: normal;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 5px;
+  overscroll-behavior-x: contain;
 }
 
 .paused-player-item {
   min-width: 0;
+  flex: 0 0 var(--paused-related-item-width, 210px);
   display: grid;
   align-content: start;
   gap: 5px;
@@ -4080,8 +4054,6 @@ label {
 }
 
 .next-up-panel {
-  position: relative;
-  z-index: 6;
   display: grid;
   gap: 12px;
   margin-bottom: 8px;
@@ -4104,13 +4076,6 @@ label {
 
 .next-up-heading > div {
   min-width: 0;
-}
-
-.next-up-heading-actions {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 
 .next-up-heading span {
@@ -4363,6 +4328,10 @@ label {
 
 @media (max-width: 1016px) {
   .watch-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .recommendation-rail.episode-watch-rail {
     grid-template-columns: minmax(0, 1fr);
   }
 
